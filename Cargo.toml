@@ -1,0 +1,7 @@
+[package]
+name = "rbackup"
+version = "0.1.0"
+authors = ["JendaKolena <jendakolena@gmail.com>"]
+
+[dependencies]
+
