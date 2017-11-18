@@ -7,8 +7,9 @@ extern crate log;
 //#[macro_use]
 //extern crate lazy_static;
 extern crate time;
+
 use std::fs::File;
-use std::io::prelude::*;
+//use std::io::prelude::*;
 use std::path::Path;
 use failure::Error;
 //use futures::{future, Future};
@@ -21,27 +22,27 @@ use std::time::{SystemTime, UNIX_EPOCH};
 //    static ref POOL: CpuPool = CpuPool::new_num_cpus();
 //}
 
-pub fn run(file_name: &String) -> Result<(), Error> {
-    env_logger::init()?;
-
-    let time_stamp = (SystemTime::now()
+pub fn save(repo_dir: String, pc_id: String, orig_file_name: String, temp_file_name: &str) -> Result<(), Error> {
+    let current_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .expect("Time went backwards")
-        .as_secs() * 1000)
-        .to_string();
+        .expect("Could not get current time");
+
+    let time_stamp = (current_time.as_secs() * 1000 + (current_time.subsec_nanos() as u64) / 1000).to_string();
 
     debug!("Current time: {}", time_stamp);
 
-    let file_name_final = (file_name.clone() + "/" + &time_stamp).replace("/","_,_");
+    let file_name_final = (pc_id + "_" + &orig_file_name + "_" + &time_stamp)
+        .replace("|", "-")
+        .replace("/", "|");
 
     debug!("Final name: {}", file_name_final);
 
-    let file = File::open(Path::new(&file_name)).expect("Could not open file ");
+    let file = File::open(Path::new(&temp_file_name)).expect("Could not open file");
 
     let output = Command::new("rdedup")
         .stdin(file)
         .arg("--dir")
-        .arg("/data/deduprepo/")
+        .arg(repo_dir)
         .arg("store")
         .arg(file_name_final)
         .output()
