@@ -1,6 +1,7 @@
 extern crate failure;
 extern crate futures;
 extern crate futures_cpupool;
+extern crate tempfile;
 extern crate env_logger;
 #[macro_use]
 extern crate log;
@@ -14,9 +15,11 @@ use std::path::Path;
 use failure::Error;
 //use futures::{future, Future};
 //use futures_cpupool::CpuPool;
-use std::process::Command;
-
+use std::process::{Command, Stdio};
+use tempfile::{NamedTempFile, NamedTempFileOptions};
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::io;
+use std::io::Write;
 
 //lazy_static! {
 //    static ref POOL: CpuPool = CpuPool::new_num_cpus();
@@ -66,4 +69,41 @@ pub fn save(repo_dir: String, pc_id: String, orig_file_name: String, temp_file_n
         // TODO Err
         Ok(())
     }
+}
+
+pub fn load(repo_dir: String, pc_id: String, orig_file_name: String, time_stamp: u64) -> io::Result<NamedTempFile> {
+    let temp_file = NamedTempFileOptions::new()
+        .prefix("rbackup")
+        .create()
+        .expect("Could not create temp file");
+
+    let output_file_name = String::from(temp_file.path().to_str().expect("Could not extract path from temp file"));
+
+    let file_name_final = (pc_id + "_" + &orig_file_name + "_" + time_stamp.to_string().as_ref())
+        .replace("|", "-")
+        .replace("/", "|");
+
+    println!("Requested name: {}", file_name_final);
+    println!("TMP file: {}", output_file_name);
+
+    Command::new("rdedup")
+        .env("RDEDUP_PASSPHRASE", "jenda")
+        .arg("--dir")
+        .arg(repo_dir)
+        .arg("load")
+        .arg(file_name_final)
+        .output()
+        .and_then(|output| {
+            File::create(temp_file.path())
+                .and_then(|mut file| {
+                    file
+                        .write(&output.stdout)
+                        .map(|r| {
+                            println!("Output: {} B", r);
+                            println!("Status: {:?}, stderr: {}", output.status, String::from_utf8(output.stderr).expect("Could not convert error output to UTF-8"));
+
+                            temp_file
+                        })
+                })
+        })
 }

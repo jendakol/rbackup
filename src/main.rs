@@ -12,13 +12,36 @@ extern crate log;
 //use std::process;
 //use std::env;
 use rocket::Data;
+use rocket::response::Stream;
 use std::io;
+use std::fs::File;
 use tempfile::NamedTempFile;
 
 #[derive(FromForm)]
 struct UploadMetadata {
     orig_file_name: String,
     pc_id: String
+}
+
+#[derive(FromForm)]
+struct DownloadMetadata {
+    orig_file_name: String,
+    time_stamp: u64,
+    pc_id: String
+}
+
+#[get("/download?<metadata>")]
+fn download(metadata: DownloadMetadata) -> io::Result<Stream<File>> {
+    rbackup::load(String::from("/data/deduprepo/"), metadata.pc_id, metadata.orig_file_name, metadata.time_stamp)
+        .and_then(|path| {
+            println!("Temp file: {:?}", path);
+
+            Result::Ok(
+                Stream::from(
+                    File::from(path)
+                )
+            )
+        })
 }
 
 #[post("/upload?<metadata>", format = "application/octet-stream", data = "<data>")]
@@ -69,6 +92,7 @@ fn main() {
 
     rocket::ignite()
         .mount("/", routes![upload])
+        .mount("/", routes![download])
         .launch();
 
     //    match rbackup::run(repo_dir, file_name) {
