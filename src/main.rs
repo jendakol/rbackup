@@ -94,15 +94,4 @@ fn main() {
         .mount("/", routes![upload])
         .mount("/", routes![download])
         .launch();
-
-    //    match rbackup::run(repo_dir, file_name) {
-    //        Ok(()) => {
-    //            println!();
-    //            ()
-    //        }
-    //        Err(e) => {
-    //            eprintln!("{}", e);
-    //            process::exit(1);
-    //        }
-    //    }
 }

@@ -1,29 +1,19 @@
 extern crate failure;
-extern crate futures;
-extern crate futures_cpupool;
 extern crate tempfile;
 extern crate env_logger;
 #[macro_use]
 extern crate log;
-//#[macro_use]
-//extern crate lazy_static;
 extern crate time;
 
 use std::fs::File;
-//use std::io::prelude::*;
 use std::path::Path;
 use failure::Error;
-//use futures::{future, Future};
-//use futures_cpupool::CpuPool;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use tempfile::{NamedTempFile, NamedTempFileOptions};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::io;
 use std::io::Write;
 
-//lazy_static! {
-//    static ref POOL: CpuPool = CpuPool::new_num_cpus();
-//}
 
 pub fn save(repo_dir: String, pc_id: String, orig_file_name: String, temp_file_name: &str) -> Result<(), Error> {
     let current_time = SystemTime::now()
