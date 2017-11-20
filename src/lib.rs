@@ -108,15 +108,17 @@ pub fn list (repo_dir: String, pc_id: String) -> io::Result<String> {
             let out = String::from_utf8(output.stdout).expect("Could not convert stdout to string");
             let lines: Vec<&str> = out.trim().split("\n").collect();
 
-//            let data: Vec<Vec<&str>> = lines.mapped(|l|{
-//                l.split("_").collect()
-//            });
+            let data = lines.iter().map(|l|{
+                l.split("_").collect::<Vec<&str>>().get(1).expect("")
+            });
+
+//            data.map()
 
 //            data.map(|f| {
 //                f.get
 //            })
 
-            String::from(lines.join(";"))
+            String::from(data.join(""))
 
         })
 }
