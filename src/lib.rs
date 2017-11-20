@@ -4,7 +4,10 @@ extern crate env_logger;
 #[macro_use]
 extern crate log;
 extern crate time;
+extern crate serde_json;
+extern crate multimap;
 
+use multimap::MultiMap;
 use std::fs::File;
 use std::path::Path;
 use failure::Error;
@@ -13,7 +16,7 @@ use tempfile::{NamedTempFile, NamedTempFileOptions};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::io;
 use std::io::Write;
-
+use std::ops::Deref;
 
 pub fn save(repo_dir: String, pc_id: String, orig_file_name: String, temp_file_name: &str) -> Result<(), Error> {
     let current_time = SystemTime::now()
@@ -98,27 +101,33 @@ pub fn load(repo_dir: String, pc_id: String, orig_file_name: String, time_stamp:
         })
 }
 
-pub fn list (repo_dir: String, pc_id: String) -> io::Result<String> {
+pub fn list(repo_dir: String, pc_id: String) -> io::Result<String> {
     Command::new("rdedup")
         .arg("--dir")
         .arg(repo_dir)
         .arg("ls")
         .output()
-        .map(|output|{
+        .map(|output| {
             let out = String::from_utf8(output.stdout).expect("Could not convert stdout to string");
-            let lines: Vec<&str> = out.trim().split("\n").collect();
 
-            let data = lines.iter().map(|l|{
-                l.split("_").collect::<Vec<&str>>().get(1).expect("")
-            });
+            let data = out.trim().lines().filter_map(|l: &str| {
+                let parts = l.split("_").collect::<Vec<&str>>();
 
-//            data.map()
+                match (parts.get(0), parts.get(1), parts.get(2).map(|num| num.parse::<u64>())) {
+                    (_, _, None) => None,
+                    (prefix, _, _) if prefix != Some(&pc_id.deref()) => None,
+                    (_, _, Some(Err(e))) => {
+                        error!("Wrong num: {}", e);
+                        None
+                    }
+                    (_, None, Some(Ok(_))) => None,
+                    (_, Some(name), Some(Ok(num))) => {
+                        let original_name = name.clone().replace("|", "/");
+                        Some((original_name, num))
+                    }
+                }
+            }).collect::<MultiMap<String, _>>();
 
-//            data.map(|f| {
-//                f.get
-//            })
-
-            String::from(data.join(""))
-
+            String::from_utf8(serde_json::to_vec(&data).expect("Could not convert result to JSON")).expect("Could not convert result to String")
         })
 }
