@@ -97,3 +97,26 @@ pub fn load(repo_dir: String, pc_id: String, orig_file_name: String, time_stamp:
                 })
         })
 }
+
+pub fn list (repo_dir: String, pc_id: String) -> io::Result<String> {
+    Command::new("rdedup")
+        .arg("--dir")
+        .arg(repo_dir)
+        .arg("ls")
+        .output()
+        .map(|output|{
+            let out = String::from_utf8(output.stdout).expect("Could not convert stdout to string");
+            let lines: Vec<&str> = out.trim().split("\n").collect();
+
+//            let data: Vec<Vec<&str>> = lines.mapped(|l|{
+//                l.split("_").collect()
+//            });
+
+//            data.map(|f| {
+//                f.get
+//            })
+
+            String::from(lines.join(";"))
+
+        })
+}

@@ -30,6 +30,16 @@ struct DownloadMetadata {
     pc_id: String
 }
 
+#[derive(FromForm)]
+struct ListMetadata {
+    pc_id: String
+}
+
+#[get("/list?<metadata>")]
+fn list(metadata: ListMetadata) -> io::Result<String> {
+    rbackup::list(String::from("/data/deduprepo/"), metadata.pc_id)
+}
+
 #[get("/download?<metadata>")]
 fn download(metadata: DownloadMetadata) -> io::Result<Stream<File>> {
     rbackup::load(String::from("/data/deduprepo/"), metadata.pc_id, metadata.orig_file_name, metadata.time_stamp)
@@ -93,5 +103,6 @@ fn main() {
     rocket::ignite()
         .mount("/", routes![upload])
         .mount("/", routes![download])
+        .mount("/", routes![list])
         .launch();
 }
