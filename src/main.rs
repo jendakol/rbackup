@@ -8,7 +8,6 @@ extern crate tempfile;
 #[macro_use]
 extern crate log;
 
-use std::collections::HashMap;
 use rocket::Data;
 use rocket::response::Stream;
 use rocket::State;
@@ -77,7 +76,7 @@ struct AppConfig {
 }
 
 fn main() {
-    let mut settings = config::Config::default()
+    let settings = config::Config::default()
         .merge(config::File::with_name("Settings")).unwrap();
 
     let config = AppConfig {

@@ -20,8 +20,7 @@ use std::ops::Deref;
 
 pub fn save(repo_dir: String, pc_id: String, orig_file_name: String, temp_file_name: &str) -> Result<(), Error> {
     let current_time = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("Could not get current time");
+        .duration_since(UNIX_EPOCH)?;
 
     let time_stamp = current_time.as_secs() * 1000 + (current_time.subsec_nanos() as u64) / 1000;
 
@@ -31,7 +30,7 @@ pub fn save(repo_dir: String, pc_id: String, orig_file_name: String, temp_file_n
 
     debug!("Final name: {}", file_name_final);
 
-    let file = File::open(Path::new(&temp_file_name)).expect("Could not open file");
+    let file = File::open(Path::new(&temp_file_name))?;
 
     let output = Command::new("rdedup")
         .stdin(file)
@@ -46,14 +45,14 @@ pub fn save(repo_dir: String, pc_id: String, orig_file_name: String, temp_file_n
     debug!("Exit code: {}", exit_code);
 
     if exit_code == 0 {
-        let output = String::from_utf8(output.stdout).expect("Could not convert output to UTF-8");
+        let output = String::from_utf8(output.stdout)?;
         let split: Vec<&str> = output.trim().split("\n").collect();
 
         debug!("Output: {:?}", split);
 
         Ok(())
     } else {
-        let output = String::from_utf8(output.stderr).expect("Could not convert error output to UTF-8");
+        let output = String::from_utf8(output.stderr)?;
 
         warn!("Exit code {}, stderr: {:?}", exit_code, output);
 
@@ -65,8 +64,7 @@ pub fn save(repo_dir: String, pc_id: String, orig_file_name: String, temp_file_n
 pub fn load(repo_dir: String, pc_id: String, orig_file_name: String, time_stamp: u64) -> io::Result<NamedTempFile> {
     let temp_file = NamedTempFileOptions::new()
         .prefix("rbackup")
-        .create()
-        .expect("Could not create temp file");
+        .create()?;
 
     let output_file_name = String::from(temp_file.path().to_str().expect("Could not extract path from temp file"));
 
