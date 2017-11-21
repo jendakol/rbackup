@@ -23,13 +23,11 @@ pub fn save(repo_dir: String, pc_id: String, orig_file_name: String, temp_file_n
         .duration_since(UNIX_EPOCH)
         .expect("Could not get current time");
 
-    let time_stamp = (current_time.as_secs() * 1000 + (current_time.subsec_nanos() as u64) / 1000).to_string();
+    let time_stamp = current_time.as_secs() * 1000 + (current_time.subsec_nanos() as u64) / 1000;
 
     debug!("Current time: {}", time_stamp);
 
-    let file_name_final = (pc_id + "_" + &orig_file_name + "_" + &time_stamp)
-        .replace("|", "-")
-        .replace("/", "|");
+    let file_name_final = to_final_name(pc_id, orig_file_name, time_stamp);
 
     debug!("Final name: {}", file_name_final);
 
@@ -72,12 +70,10 @@ pub fn load(repo_dir: String, pc_id: String, orig_file_name: String, time_stamp:
 
     let output_file_name = String::from(temp_file.path().to_str().expect("Could not extract path from temp file"));
 
-    let file_name_final = (pc_id + "_" + &orig_file_name + "_" + time_stamp.to_string().as_ref())
-        .replace("|", "-")
-        .replace("/", "|");
+    let file_name_final = to_final_name(pc_id, orig_file_name, time_stamp);
 
-    println!("Requested name: {}", file_name_final);
-    println!("TMP file: {}", output_file_name);
+    debug!("Requested name: {}", file_name_final);
+    debug!("TMP file: {}", output_file_name);
 
     Command::new("rdedup")
         .env("RDEDUP_PASSPHRASE", "jenda")
@@ -111,7 +107,7 @@ pub fn list(repo_dir: String, pc_id: String) -> io::Result<String> {
             let out = String::from_utf8(output.stdout).expect("Could not convert stdout to string");
 
             let data = out.trim().lines().filter_map(|l: &str| {
-                let parts = l.split("_").collect::<Vec<&str>>();
+                let parts = l.split("#").collect::<Vec<&str>>();
 
                 match (parts.get(0), parts.get(1), parts.get(2).map(|num| num.parse::<u64>())) {
                     (_, _, None) => None,
@@ -122,7 +118,7 @@ pub fn list(repo_dir: String, pc_id: String) -> io::Result<String> {
                     }
                     (_, None, Some(Ok(_))) => None,
                     (_, Some(name), Some(Ok(num))) => {
-                        let original_name = name.clone().replace("|", "/");
+                        let original_name = name.clone().replace("|", "/").replace("!*!", "#");
                         Some((original_name, num))
                     }
                 }
@@ -130,4 +126,13 @@ pub fn list(repo_dir: String, pc_id: String) -> io::Result<String> {
 
             String::from_utf8(serde_json::to_vec(&data).expect("Could not convert result to JSON")).expect("Could not convert result to String")
         })
+}
+
+fn to_final_name(pc_id: String, orig_file_name: String, time_stamp: u64) -> String {
+    let file_name_final = orig_file_name
+        .replace("|", "-")
+        .replace("#", "!*!")
+        .replace("/", "|");
+
+    pc_id + "#" + &file_name_final + "#" + &time_stamp.to_string()
 }

@@ -9,10 +9,11 @@ extern crate tempfile;
 extern crate log;
 
 //use std::collections::HashMap;
-//use std::process;
-//use std::env;
+use std::process;
+use std::env;
 use rocket::Data;
 use rocket::response::Stream;
+use rocket::State;
 use std::io;
 use std::fs::File;
 use tempfile::NamedTempFile;
@@ -36,16 +37,14 @@ struct ListMetadata {
 }
 
 #[get("/list?<metadata>")]
-fn list(metadata: ListMetadata) -> io::Result<String> {
-    rbackup::list(String::from("/data/deduprepo/"), metadata.pc_id)
+fn list(config: State<AppConfig>, metadata: ListMetadata) -> io::Result<String> {
+    rbackup::list(config.repo_dir.clone(), metadata.pc_id)
 }
 
 #[get("/download?<metadata>")]
-fn download(metadata: DownloadMetadata) -> io::Result<Stream<File>> {
-    rbackup::load(String::from("/data/deduprepo/"), metadata.pc_id, metadata.orig_file_name, metadata.time_stamp)
+fn download(config: State<AppConfig>, metadata: DownloadMetadata) -> io::Result<Stream<File>> {
+    rbackup::load(config.repo_dir.clone(), metadata.pc_id, metadata.orig_file_name, metadata.time_stamp)
         .and_then(|path| {
-            println!("Temp file: {:?}", path);
-
             Result::Ok(
                 Stream::from(
                     File::from(path)
@@ -55,7 +54,7 @@ fn download(metadata: DownloadMetadata) -> io::Result<Stream<File>> {
 }
 
 #[post("/upload?<metadata>", format = "application/octet-stream", data = "<data>")]
-fn upload(data: Data, metadata: UploadMetadata) -> &'static str {
+fn upload(config: State<AppConfig>, data: Data, metadata: UploadMetadata) -> &'static str {
     // TODO stream the data!
 
     let mut temp_file = NamedTempFile::new().expect("Failed to create temp file");
@@ -64,7 +63,7 @@ fn upload(data: Data, metadata: UploadMetadata) -> &'static str {
 
     let temp_file_name = temp_file.path().to_str().expect("Could not extract filename from temp file");
 
-    match rbackup::save(String::from("/data/deduprepo/"), metadata.pc_id, metadata.orig_file_name, temp_file_name) {
+    match rbackup::save(config.repo_dir.clone(), metadata.pc_id, metadata.orig_file_name, temp_file_name) {
         Ok(()) => {
             "ok"
         }
@@ -75,14 +74,18 @@ fn upload(data: Data, metadata: UploadMetadata) -> &'static str {
     }
 }
 
+struct AppConfig {
+    repo_dir: String
+}
+
 fn main() {
-    //    let args: Vec<String> = env::args().collect();
-    //
-    //    if args.len() != 2 {
-    //        eprintln!("No filename was provided!");
-    //        process::exit(1);
-    //    }
-    //
+    let args: Vec<String> = env::args().collect();
+
+    if args.len() != 2 {
+        eprintln!("No filename was provided!");
+        process::exit(1);
+    }
+
     //    let file_name = &args[1];
     //
     //    let mut settings = config::Config::default();
@@ -100,9 +103,14 @@ fn main() {
     //
     //    let repo_dir = String::from("/data/deduprepo/");
 
+    let config = AppConfig {
+        repo_dir: args[1].to_string()
+    };
+
     rocket::ignite()
         .mount("/", routes![upload])
         .mount("/", routes![download])
         .mount("/", routes![list])
+        .manage(config)
         .launch();
 }
