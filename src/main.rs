@@ -8,9 +8,7 @@ extern crate tempfile;
 #[macro_use]
 extern crate log;
 
-//use std::collections::HashMap;
-use std::process;
-use std::env;
+use std::collections::HashMap;
 use rocket::Data;
 use rocket::response::Stream;
 use rocket::State;
@@ -79,32 +77,11 @@ struct AppConfig {
 }
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
-
-    if args.len() != 2 {
-        eprintln!("No filename was provided!");
-        process::exit(1);
-    }
-
-    //    let file_name = &args[1];
-    //
-    //    let mut settings = config::Config::default();
-    //    settings
-    //        // Add in `./Settings.toml`
-    //        //        .merge(config::File::with_name("Settings")).unwrap()
-    //        // Add in settings from the environment (with a prefix of APP)
-    //        // Eg.. `APP_DEBUG=1 ./target/app` would set the `debug` key
-    //        .merge(config::Environment::with_prefix("APP")).unwrap();
-    //
-    //    //    println!("{:?}",
-    //    //             settings.deserialize::<HashMap<String, String>>().unwrap());
-    //    //
-    //    //    process::exit(0);
-    //
-    //    let repo_dir = String::from("/data/deduprepo/");
+    let mut settings = config::Config::default()
+        .merge(config::File::with_name("Settings")).unwrap();
 
     let config = AppConfig {
-        repo_dir: args[1].to_string()
+        repo_dir: settings.get_str("repo").expect("Could not extract repo path from config")
     };
 
     rocket::ignite()
