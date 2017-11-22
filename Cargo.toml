@@ -5,7 +5,8 @@ authors = ["JendaKolena <jendakolena@gmail.com>"]
 
 [dependencies]
 
-failure = "0.0.1"
+failure = "~0.1"
+failure_derive = "~0.1"
 log = "~0.3"
 env_logger = "~0.4"
 text_io = "0.1.6"
