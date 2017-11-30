@@ -1,6 +1,7 @@
 #![feature(plugin, custom_derive)]
 #![plugin(rocket_codegen)]
 
+extern crate failure;
 extern crate rbackup;
 extern crate config;
 extern crate rocket;
@@ -8,6 +9,7 @@ extern crate tempfile;
 #[macro_use]
 extern crate log;
 
+use failure::Error;
 use rocket::Data;
 use rocket::response::Stream;
 use rocket::State;
@@ -34,13 +36,13 @@ struct ListMetadata {
 }
 
 #[get("/list?<metadata>")]
-fn list(config: State<AppConfig>, metadata: ListMetadata) -> io::Result<String> {
-    rbackup::list(config.repo_dir.clone(), metadata.pc_id)
+fn list(config: State<AppConfig>, metadata: ListMetadata) -> Result<String, Error> {
+    rbackup::list(&config.repo_dir, &metadata.pc_id)
 }
 
 #[get("/download?<metadata>")]
-fn download(config: State<AppConfig>, metadata: DownloadMetadata) -> io::Result<Stream<File>> {
-    rbackup::load(config.repo_dir.clone(), metadata.pc_id, metadata.orig_file_name, metadata.time_stamp)
+fn download(config: State<AppConfig>, metadata: DownloadMetadata) -> Result<Stream<File>, Error> {
+    rbackup::load(&config.repo_dir, &metadata.pc_id, &metadata.orig_file_name, metadata.time_stamp)
         .and_then(|path| {
             Result::Ok(
                 Stream::from(
@@ -60,7 +62,7 @@ fn upload(config: State<AppConfig>, data: Data, metadata: UploadMetadata) -> &'s
 
     let temp_file_name = temp_file.path().to_str().expect("Could not extract filename from temp file");
 
-    match rbackup::save(config.repo_dir.clone(), metadata.pc_id, metadata.orig_file_name, temp_file_name) {
+    match rbackup::save(&config.repo_dir, &metadata.pc_id, &metadata.orig_file_name, temp_file_name) {
         Ok(()) => {
             "ok"
         }

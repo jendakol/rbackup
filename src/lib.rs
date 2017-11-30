@@ -1,3 +1,5 @@
+#[macro_use]
+extern crate failure_derive;
 extern crate failure;
 extern crate tempfile;
 extern crate env_logger;
@@ -14,15 +16,23 @@ use failure::Error;
 use std::process::Command;
 use tempfile::{NamedTempFile, NamedTempFileOptions};
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::io;
 use std::io::Write;
 use std::ops::Deref;
+use std::str;
 
-pub fn save(repo_dir: String, pc_id: String, orig_file_name: String, temp_file_name: &str) -> Result<(), Error> {
+#[derive(Debug, Fail)]
+#[fail(display = "Could not get exit code of ext program")]
+struct MissingExitCode;
+
+#[derive(Debug, Fail)]
+#[fail(display = "Broken unicode")]
+struct BrokenUnicode;
+
+pub fn save(repo_dir: &str, pc_id: &str, orig_file_name: &str, temp_file_name: &str) -> Result<(), Error> {
     let current_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)?;
 
-    let time_stamp = current_time.as_secs() * 1000 + (current_time.subsec_nanos() as u64) / 1000;
+    let time_stamp = current_time.as_secs() * 1000 + u64::from(current_time.subsec_nanos()) / 1000;
 
     debug!("Current time: {}", time_stamp);
 
@@ -38,17 +48,17 @@ pub fn save(repo_dir: String, pc_id: String, orig_file_name: String, temp_file_n
         .arg(repo_dir)
         .arg("store")
         .arg(file_name_final)
-        .output()
-        .expect("Could not execute 'rdedup'!");
+        .output()?;
 
-    let exit_code = output.status.code().expect("Could not get exit code of ext program");
+    let exit_code = output.status.code().ok_or(MissingExitCode)?;
     debug!("Exit code: {}", exit_code);
 
     if exit_code == 0 {
-        let output = String::from_utf8(output.stdout)?;
-        let split: Vec<&str> = output.trim().split("\n").collect();
+        let split = str::from_utf8(&output.stdout)?
+            .trim()
+            .lines();
 
-        debug!("Output: {:?}", split);
+        debug!("Output: {:?}", split.collect::<Vec<_>>());
 
         Ok(())
     } else {
@@ -61,12 +71,12 @@ pub fn save(repo_dir: String, pc_id: String, orig_file_name: String, temp_file_n
     }
 }
 
-pub fn load(repo_dir: String, pc_id: String, orig_file_name: String, time_stamp: u64) -> io::Result<NamedTempFile> {
+pub fn load(repo_dir: &str, pc_id: &str, orig_file_name: &str, time_stamp: u64) -> Result<NamedTempFile, Error> {
     let temp_file = NamedTempFileOptions::new()
         .prefix("rbackup")
         .create()?;
 
-    let output_file_name = String::from(temp_file.path().to_str().expect("Could not extract path from temp file"));
+    let output_file_name = String::from(temp_file.path().to_str().ok_or(BrokenUnicode)?);
 
     let file_name_final = to_final_name(pc_id, orig_file_name, time_stamp);
 
@@ -80,57 +90,61 @@ pub fn load(repo_dir: String, pc_id: String, orig_file_name: String, time_stamp:
         .arg("load")
         .arg(file_name_final)
         .output()
+        .map_err(Error::from)
         .and_then(|output| {
             File::create(temp_file.path())
+                .map_err(Error::from)
                 .and_then(|mut file| {
                     file
                         .write(&output.stdout)
-                        .map(|r| {
+                        .map_err(Error::from)
+                        .and_then(|r| {
                             println!("Output: {} B", r);
-                            println!("Status: {:?}, stderr: {}", output.status, String::from_utf8(output.stderr).expect("Could not convert error output to UTF-8"));
+                            println!("Status: {:?}, stderr: {}", output.status, String::from_utf8(output.stderr)?);
 
-                            temp_file
+                            Ok(temp_file)
                         })
                 })
-        })
+            })
 }
 
-pub fn list(repo_dir: String, pc_id: String) -> io::Result<String> {
+pub fn list(repo_dir: &str, pc_id: &str) -> Result<String, Error> {
     Command::new("rdedup")
         .arg("--dir")
         .arg(repo_dir)
         .arg("ls")
         .output()
-        .map(|output| {
-            let out = String::from_utf8(output.stdout).expect("Could not convert stdout to string");
+        .map_err(Error::from)
+        .and_then(|output| {
+            let out = str::from_utf8(&output.stdout)?;
 
             let data = out.trim().lines().filter_map(|l: &str| {
-                let parts = l.split("#").collect::<Vec<&str>>();
+                let parts = l.split('#').collect::<Vec<&str>>();
 
                 match (parts.get(0), parts.get(1), parts.get(2).map(|num| num.parse::<u64>())) {
-                    (_, _, None) => None,
                     (prefix, _, _) if prefix != Some(&pc_id.deref()) => None,
+                    (_, _, None) |
+                    (_, None, Some(Ok(_))) => None,
                     (_, _, Some(Err(e))) => {
                         error!("Wrong num: {}", e);
                         None
                     }
-                    (_, None, Some(Ok(_))) => None,
                     (_, Some(name), Some(Ok(num))) => {
-                        let original_name = name.clone().replace("|", "/").replace("!*!", "#");
+                        let original_name = name.replace("|", "/").replace("!*!", "#");
                         Some((original_name, num))
                     }
                 }
             }).collect::<MultiMap<String, _>>();
 
-            String::from_utf8(serde_json::to_vec(&data).expect("Could not convert result to JSON")).expect("Could not convert result to String")
+            Ok(serde_json::to_string(&data)?)
         })
 }
 
-fn to_final_name(pc_id: String, orig_file_name: String, time_stamp: u64) -> String {
+fn to_final_name(pc_id: &str, orig_file_name: &str, time_stamp: u64) -> String {
     let file_name_final = orig_file_name
         .replace("|", "-")
         .replace("#", "!*!")
         .replace("/", "|");
 
-    pc_id + "#" + &file_name_final + "#" + &time_stamp.to_string()
+    format!("{}#{}#{}", pc_id, file_name_final, time_stamp)
 }
