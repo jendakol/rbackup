@@ -5,7 +5,6 @@ extern crate failure;
 extern crate rbackup;
 extern crate config;
 extern crate rocket;
-extern crate tempfile;
 #[macro_use]
 extern crate log;
 
@@ -13,9 +12,7 @@ use failure::Error;
 use rocket::Data;
 use rocket::response::Stream;
 use rocket::State;
-use std::io;
-use std::fs::File;
-use tempfile::NamedTempFile;
+use std::process::ChildStdout;
 
 #[derive(FromForm)]
 struct UploadMetadata {
@@ -41,28 +38,18 @@ fn list(config: State<AppConfig>, metadata: ListMetadata) -> Result<String, Erro
 }
 
 #[get("/download?<metadata>")]
-fn download(config: State<AppConfig>, metadata: DownloadMetadata) -> Result<Stream<File>, Error> {
+fn download(config: State<AppConfig>, metadata: DownloadMetadata) -> Result<Stream<ChildStdout>, Error> {
     rbackup::load(&config.repo_dir, &metadata.pc_id, &metadata.orig_file_name, metadata.time_stamp)
-        .and_then(|path| {
-            Result::Ok(
-                Stream::from(
-                    File::from(path)
-                )
+        .map(|stdout| {
+            Stream::from(
+                stdout
             )
         })
 }
 
 #[post("/upload?<metadata>", format = "application/octet-stream", data = "<data>")]
 fn upload(config: State<AppConfig>, data: Data, metadata: UploadMetadata) -> &'static str {
-    // TODO stream the data!
-
-    let mut temp_file = NamedTempFile::new().expect("Failed to create temp file");
-
-    io::copy(&mut data.open(), &mut temp_file).expect("Could not copy received data to temp file");
-
-    let temp_file_name = temp_file.path().to_str().expect("Could not extract filename from temp file");
-
-    match rbackup::save(&config.repo_dir, &metadata.pc_id, &metadata.orig_file_name, temp_file_name) {
+    match rbackup::save(&config.repo_dir, &metadata.pc_id, &metadata.orig_file_name, data) {
         Ok(()) => {
             "ok"
         }

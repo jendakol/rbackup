@@ -1,34 +1,29 @@
 #[macro_use]
 extern crate failure_derive;
 extern crate failure;
-extern crate tempfile;
 extern crate env_logger;
 #[macro_use]
 extern crate log;
 extern crate time;
 extern crate serde_json;
 extern crate multimap;
+extern crate rocket;
 
 use multimap::MultiMap;
-use std::fs::File;
-use std::path::Path;
 use failure::Error;
 use std::process::Command;
-use tempfile::{NamedTempFile, NamedTempFileOptions};
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::io::Write;
+use std::process::Stdio;
+use std::process::ChildStdout;
 use std::ops::Deref;
 use std::str;
+use rocket::data::Data;
 
 #[derive(Debug, Fail)]
 #[fail(display = "Could not get exit code of ext program")]
 struct MissingExitCode;
 
-#[derive(Debug, Fail)]
-#[fail(display = "Broken unicode")]
-struct BrokenUnicode;
-
-pub fn save(repo_dir: &str, pc_id: &str, orig_file_name: &str, temp_file_name: &str) -> Result<(), Error> {
+pub fn save(repo_dir: &str, pc_id: &str, orig_file_name: &str, data: Data) -> Result<(), Error> {
     let current_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)?;
 
@@ -40,15 +35,20 @@ pub fn save(repo_dir: &str, pc_id: &str, orig_file_name: &str, temp_file_name: &
 
     debug!("Final name: {}", file_name_final);
 
-    let file = File::open(Path::new(&temp_file_name))?;
-
-    let output = Command::new("rdedup")
-        .stdin(file)
+    let mut child = Command::new("rdedup")
+        .stdin(Stdio::piped())
         .arg("--dir")
         .arg(repo_dir)
         .arg("store")
         .arg(file_name_final)
-        .output()?;
+        .spawn()?;
+
+
+    let stdin = child.stdin.take();
+
+    data.stream_to(&mut stdin.unwrap())?;
+
+    let output = child.wait_with_output()?;
 
     let exit_code = output.status.code().ok_or(MissingExitCode)?;
     debug!("Exit code: {}", exit_code);
@@ -71,17 +71,10 @@ pub fn save(repo_dir: &str, pc_id: &str, orig_file_name: &str, temp_file_name: &
     }
 }
 
-pub fn load(repo_dir: &str, pc_id: &str, orig_file_name: &str, time_stamp: u64) -> Result<NamedTempFile, Error> {
-    let temp_file = NamedTempFileOptions::new()
-        .prefix("rbackup")
-        .create()?;
-
-    let output_file_name = String::from(temp_file.path().to_str().ok_or(BrokenUnicode)?);
-
+pub fn load(repo_dir: &str, pc_id: &str, orig_file_name: &str, time_stamp: u64) -> Result<ChildStdout, Error> {
     let file_name_final = to_final_name(pc_id, orig_file_name, time_stamp);
 
     debug!("Requested name: {}", file_name_final);
-    debug!("TMP file: {}", output_file_name);
 
     Command::new("rdedup")
         .env("RDEDUP_PASSPHRASE", "jenda")
@@ -89,23 +82,12 @@ pub fn load(repo_dir: &str, pc_id: &str, orig_file_name: &str, time_stamp: u64) 
         .arg(repo_dir)
         .arg("load")
         .arg(file_name_final)
-        .output()
+        .stdout(Stdio::piped())
+        .spawn()
         .map_err(Error::from)
-        .and_then(|output| {
-            File::create(temp_file.path())
-                .map_err(Error::from)
-                .and_then(|mut file| {
-                    file
-                        .write(&output.stdout)
-                        .map_err(Error::from)
-                        .and_then(|r| {
-                            println!("Output: {} B", r);
-                            println!("Status: {:?}, stderr: {}", output.status, String::from_utf8(output.stderr)?);
-
-                            Ok(temp_file)
-                        })
-                })
-            })
+        .map(|stdout| {
+            stdout.stdout.unwrap()
+        })
 }
 
 pub fn list(repo_dir: &str, pc_id: &str) -> Result<String, Error> {
