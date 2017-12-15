@@ -65,11 +65,11 @@ struct AppConfig {
 }
 
 fn main() {
-    let settings = config::Config::default()
-        .merge(config::File::with_name("Settings")).unwrap();
+    let mut config = config::Config::default();
+    let config = config.merge(config::File::with_name("Settings")).unwrap();
 
     let config = AppConfig {
-        repo_dir: settings.get_str("repo").expect("Could not extract repo path from config")
+        repo_dir: config.get_str("repo").expect("Could not extract repo path from config")
     };
 
     rocket::ignite()
