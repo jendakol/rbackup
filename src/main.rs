@@ -56,18 +56,18 @@ fn list(config: State<AppConfig>, metadata: ListMetadata) -> Result<String, Erro
 //        })
 //}
 //
-//#[post("/upload?<metadata>", format = "application/octet-stream", data = "<data>")]
-//fn upload(config: State<AppConfig>, data: Data, metadata: UploadMetadata) -> &'static str {
-//    match rbackup::save(&config.repo, &metadata.pc_id, &metadata.orig_file_name, data) {
-//        Ok(()) => {
-//            "ok"
-//        }
-//        Err(e) => {
-//            warn!(config.logger, "{}", e);
-//            "FAIL"
-//        }
-//    }
-//}
+#[post("/upload?<metadata>", format = "application/octet-stream", data = "<data>")]
+fn upload(config: State<AppConfig>, data: Data, metadata: UploadMetadata) -> &'static str {
+    match rbackup::save(&config.repo, &metadata.pc_id, &metadata.orig_file_name, data) {
+        Ok(()) => {
+            "ok"
+        }
+        Err(e) => {
+            warn!(config.logger, "{}", e);
+            "FAIL"
+        }
+    }
+}
 
 
 struct AppConfig {
@@ -108,7 +108,7 @@ fn main() {
     };
 
     rocket::ignite()
-//        .mount("/", routes![upload])
+        .mount("/", routes![upload])
 //        .mount("/", routes![download])
         .mount("/", routes![list])
         .manage(config)

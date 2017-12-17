@@ -19,7 +19,6 @@ use std::process::ChildStdout;
 use std::ops::Deref;
 use std::str;
 use rocket::data::Data;
-
 use rdedup::{Repo as RdedupRepo, DecryptHandle, EncryptHandle};
 
 pub struct Repo {
@@ -28,57 +27,23 @@ pub struct Repo {
     pub encrypt: EncryptHandle
 }
 
-#[derive(Debug, Fail)]
-#[fail(display = "Could not get exit code of ext program")]
-struct MissingExitCode;
-//
-//pub fn save(repo: Repo, pc_id: &str, orig_file_name: &str, data: Data) -> Result<(), Error> {
-//    let current_time = SystemTime::now()
-//        .duration_since(UNIX_EPOCH)?;
-//
-//    let time_stamp = current_time.as_secs() * 1000 + u64::from(current_time.subsec_nanos()) / 1000;
-//
-//    debug!("Current time: {}", time_stamp);
-//
-//    let file_name_final = to_final_name(pc_id, orig_file_name, time_stamp);
-//
-//    debug!("Final name: {}", file_name_final);
-//
-//    let mut child = Command::new("rdedup")
-//        .stdin(Stdio::piped())
-//        .arg("--dir")
-//        .arg(repo_dir)
-//        .arg("store")
-//        .arg(file_name_final)
-//        .spawn()?;
-//
-//
-//    let stdin = child.stdin.take();
-//
-//    data.stream_to(&mut stdin.unwrap())?;
-//
-//    let output = child.wait_with_output()?;
-//
-//    let exit_code = output.status.code().ok_or(MissingExitCode)?;
-//    debug!("Exit code: {}", exit_code);
-//
-//    if exit_code == 0 {
-//        let split = str::from_utf8(&output.stdout)?
-//            .trim()
-//            .lines();
-//
-//        debug!("Output: {:?}", split.collect::<Vec<_>>());
-//
-//        Ok(())
-//    } else {
-//        let output = String::from_utf8(output.stderr)?;
-//
-//        warn!("Exit code {}, stderr: {:?}", exit_code, output);
-//
-//        // TODO Err
-//        Ok(())
-//    }
-//}
+pub fn save(repo: &Repo, pc_id: &str, orig_file_name: &str, data: Data) -> Result<(), Error> {
+    let current_time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)?;
+
+    let time_stamp = current_time.as_secs() * 1000 + u64::from(current_time.subsec_nanos()) / 1000;
+
+    debug!("Current time: {}", time_stamp);
+
+    let file_name_final = to_final_name(pc_id, orig_file_name, time_stamp);
+
+    debug!("Final name: {}", file_name_final);
+
+    repo.repo
+        .write(file_name_final.deref(), data.open(), &repo.encrypt)
+        .map(|stats| ())
+        .map_err(Error::from)
+}
 //
 //pub fn load(repo: &Repo, pc_id: &str, orig_file_name: &str, time_stamp: u64) -> Result<ChildStdout, Error> {
 //    let file_name_final = to_final_name(pc_id, orig_file_name, time_stamp);
