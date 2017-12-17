@@ -20,7 +20,13 @@ use std::ops::Deref;
 use std::str;
 use rocket::data::Data;
 
-use rdedup::Repo;
+use rdedup::{Repo as RdedupRepo, DecryptHandle, EncryptHandle};
+
+pub struct Repo {
+    pub repo: RdedupRepo,
+    pub decrypt: DecryptHandle,
+    pub encrypt: EncryptHandle
+}
 
 #[derive(Debug, Fail)]
 #[fail(display = "Could not get exit code of ext program")]
@@ -74,7 +80,7 @@ struct MissingExitCode;
 //    }
 //}
 //
-//pub fn load(repo: Repo, pc_id: &str, orig_file_name: &str, time_stamp: u64) -> Result<ChildStdout, Error> {
+//pub fn load(repo: &Repo, pc_id: &str, orig_file_name: &str, time_stamp: u64) -> Result<ChildStdout, Error> {
 //    let file_name_final = to_final_name(pc_id, orig_file_name, time_stamp);
 //
 //    debug!("Requested name: {}", file_name_final);
@@ -94,7 +100,7 @@ struct MissingExitCode;
 //}
 
 pub fn list(repo: &Repo, pc_id: &str) -> Result<String, Error> {
-    repo.list_names()
+    repo.repo.list_names()
         .map_err(Error::from)
         .and_then(|output| {
             let data = output.into_iter().filter_map(|l: String| {

@@ -17,9 +17,10 @@ use rocket::Data;
 use rocket::response::Stream;
 use rocket::State;
 use std::process::ChildStdout;
+use std::io::{Error as IoError, ErrorKind};
 
 use std::path::Path;
-use rdedup::Repo;
+use rdedup::{Repo as RdedupRepo, DecryptHandle, EncryptHandle};
 
 #[derive(FromForm)]
 struct UploadMetadata {
@@ -57,7 +58,7 @@ fn list(config: State<AppConfig>, metadata: ListMetadata) -> Result<String, Erro
 //
 //#[post("/upload?<metadata>", format = "application/octet-stream", data = "<data>")]
 //fn upload(config: State<AppConfig>, data: Data, metadata: UploadMetadata) -> &'static str {
-//    match rbackup::save(&config.repo_dir, &metadata.pc_id, &metadata.orig_file_name, data) {
+//    match rbackup::save(&config.repo, &metadata.pc_id, &metadata.orig_file_name, data) {
 //        Ok(()) => {
 //            "ok"
 //        }
@@ -70,7 +71,7 @@ fn list(config: State<AppConfig>, metadata: ListMetadata) -> Result<String, Erro
 
 
 struct AppConfig {
-    repo: Repo,
+    repo: rbackup::Repo,
     logger: slog::Logger
 }
 
@@ -85,10 +86,24 @@ fn main() {
     let mut config = config::Config::default();
     let config = config.merge(config::File::with_name("Settings")).unwrap();
 
-    let repo_dir = &config.get_str("repo").expect("Could not extract repo path from config");
+    let repo = config.get_str("repo_dir")
+        .map_err(|e| IoError::new(ErrorKind::NotFound, e))
+        .and_then(|repo_dir| {
+            RdedupRepo::open(&Path::new(&repo_dir), logger.clone())
+        }).expect("Could not open repo");
+
+    let dec = repo.unlock_decrypt(&|| { config.get_str("repo_pass").map_err(|e| IoError::new(ErrorKind::NotFound, e)) })
+        .expect("Could not init repo decryption");
+
+    let enc = repo.unlock_encrypt(&|| { config.get_str("repo_pass").map_err(|e| IoError::new(ErrorKind::NotFound, e)) })
+        .expect("Could not init repo encryption");
 
     let config = AppConfig {
-        repo: Repo::open(&Path::new(repo_dir), logger.clone()).expect("Could not open repo"),
+        repo: rbackup::Repo {
+            repo,
+            decrypt: dec,
+            encrypt: enc
+        },
         logger
     };
 
