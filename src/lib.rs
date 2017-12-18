@@ -9,6 +9,7 @@ extern crate serde_json;
 extern crate multimap;
 extern crate rocket;
 extern crate rdedup_lib as rdedup;
+extern crate pipe;
 
 use multimap::MultiMap;
 use failure::Error;
@@ -19,7 +20,10 @@ use std::process::ChildStdout;
 use std::ops::Deref;
 use std::str;
 use rocket::data::Data;
+use rocket::response:: Stream;
 use rdedup::{Repo as RdedupRepo, DecryptHandle, EncryptHandle};
+
+use std::io::{Write, Read, BufReader};
 
 pub struct Repo {
     pub repo: RdedupRepo,
@@ -44,25 +48,39 @@ pub fn save(repo: &Repo, pc_id: &str, orig_file_name: &str, data: Data) -> Resul
         .map(|stats| ())
         .map_err(Error::from)
 }
-//
-//pub fn load(repo: &Repo, pc_id: &str, orig_file_name: &str, time_stamp: u64) -> Result<ChildStdout, Error> {
-//    let file_name_final = to_final_name(pc_id, orig_file_name, time_stamp);
-//
-//    debug!("Requested name: {}", file_name_final);
-//
-//    Command::new("rdedup")
-//        .env("RDEDUP_PASSPHRASE", "jenda")
-//        .arg("--dir")
-//        .arg(repo_dir)
-//        .arg("load")
-//        .arg(file_name_final)
-//        .stdout(Stdio::piped())
-//        .spawn()
-//        .map_err(Error::from)
-//        .map(|stdout| {
-//            stdout.stdout.unwrap()
-//        })
-//}
+
+pub fn load(repo: &Repo, pc_id: &str, orig_file_name: &str, time_stamp: u64) -> Result<pipe::PipeReader, Error> {
+    let file_name_final = Box::new(to_final_name(pc_id, orig_file_name, time_stamp));
+
+    debug!("Requested name: {}", file_name_final);
+
+    use std::thread::spawn;
+
+    let (mut reader, mut writer) = pipe::pipe();
+
+    let message = "Hello, world!";
+
+
+    let r = Box::from(repo.repo.clone());
+
+    let r2 = Box::new(
+        repo.decrypt
+    );
+
+    let mut r3 = Box::from(writer);
+
+    spawn(move|| {
+
+        r
+            .read(file_name_final.deref(), &mut r3 , r2.deref());
+
+            ()
+    });
+
+
+
+    Ok(reader)
+}
 
 pub fn list(repo: &Repo, pc_id: &str) -> Result<String, Error> {
     repo.repo.list_names()

@@ -9,7 +9,7 @@ extern crate rocket;
 extern crate slog;
 extern crate slog_async;
 extern crate slog_term;
-extern crate url;
+extern crate pipe;
 extern crate rdedup_lib as rdedup;
 
 use failure::Error;
@@ -17,7 +17,7 @@ use rocket::Data;
 use rocket::response::Stream;
 use rocket::State;
 use std::process::ChildStdout;
-use std::io::{Error as IoError, ErrorKind};
+use std::io::{Error as IoError, ErrorKind, Read};
 
 use std::path::Path;
 use rdedup::{Repo as RdedupRepo, DecryptHandle, EncryptHandle};
@@ -45,17 +45,13 @@ fn list(config: State<AppConfig>, metadata: ListMetadata) -> Result<String, Erro
     rbackup::list(&config.repo, &metadata.pc_id)
 }
 
-//
-//#[get("/download?<metadata>")]
-//fn download(config: State<AppConfig>, metadata: DownloadMetadata) -> Result<Stream<ChildStdout>, Error> {
-//    rbackup::load(&config.repo_dir, &metadata.pc_id, &metadata.orig_file_name, metadata.time_stamp)
-//        .map(|stdout| {
-//            Stream::from(
-//                stdout
-//            )
-//        })
-//}
-//
+#[get("/download?<metadata>")]
+fn download(config: State<AppConfig>, metadata: DownloadMetadata) -> Result<Stream<pipe::PipeReader>, Error> {
+
+    rbackup::load(&config.repo, &metadata.pc_id, &metadata.orig_file_name, metadata.time_stamp)
+        .map(Stream::from)
+}
+
 #[post("/upload?<metadata>", format = "application/octet-stream", data = "<data>")]
 fn upload(config: State<AppConfig>, data: Data, metadata: UploadMetadata) -> &'static str {
     match rbackup::save(&config.repo, &metadata.pc_id, &metadata.orig_file_name, data) {
@@ -109,7 +105,7 @@ fn main() {
 
     rocket::ignite()
         .mount("/", routes![upload])
-//        .mount("/", routes![download])
+        .mount("/", routes![download])
         .mount("/", routes![list])
         .manage(config)
         .launch();
