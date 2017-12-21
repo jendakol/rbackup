@@ -12,6 +12,8 @@ extern crate slog_term;
 extern crate pipe;
 extern crate rdedup_lib as rdedup;
 
+use std::sync::Arc;
+
 use failure::Error;
 use rocket::Data;
 use rocket::response::Stream;
@@ -80,7 +82,7 @@ fn main() {
     let logger = slog::Logger::root(slog::Discard, o!());
 
     let mut config = config::Config::default();
-    let config = config.merge(config::File::with_name("Settings")).unwrap();
+    config.merge(config::File::with_name("Settings")).unwrap();
 
     let repo = config.get_str("repo_dir")
         .map_err(|e| IoError::new(ErrorKind::NotFound, e))
@@ -88,11 +90,12 @@ fn main() {
             RdedupRepo::open(&Path::new(&repo_dir), logger.clone())
         }).expect("Could not open repo");
 
-    let dec = repo.unlock_decrypt(&|| { config.get_str("repo_pass").map_err(|e| IoError::new(ErrorKind::NotFound, e)) })
-        .expect("Could not init repo decryption");
+    let config = Arc::new(config);
+    let config_dec = Arc::clone(&config);
+    let dec = Box::new(move || { config_dec.get_str("repo_pass").map_err(|e| IoError::new(ErrorKind::NotFound, e)) });
 
-    let enc = repo.unlock_encrypt(&|| { config.get_str("repo_pass").map_err(|e| IoError::new(ErrorKind::NotFound, e)) })
-        .expect("Could not init repo encryption");
+    let config_enc = Arc::clone(&config);
+    let enc = Box::new(move || { config_enc.get_str("repo_pass").map_err(|e| IoError::new(ErrorKind::NotFound, e)) });
 
     let config = AppConfig {
         repo: rbackup::Repo {

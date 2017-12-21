@@ -27,8 +27,8 @@ use std::io::{Write, Read, BufReader};
 
 pub struct Repo {
     pub repo: RdedupRepo,
-    pub decrypt: DecryptHandle,
-    pub encrypt: EncryptHandle
+    pub decrypt: Box<Fn() -> std::io::Result<String> + Send + Sync>,
+    pub encrypt: Box<Fn() -> std::io::Result<String> + Send + Sync>,
 }
 
 pub fn save(repo: &Repo, pc_id: &str, orig_file_name: &str, data: Data) -> Result<(), Error> {
@@ -43,8 +43,10 @@ pub fn save(repo: &Repo, pc_id: &str, orig_file_name: &str, data: Data) -> Resul
 
     debug!("Final name: {}", file_name_final);
 
+    let encrypt = repo.repo.unlock_encrypt(&*repo.encrypt)?;
+
     repo.repo
-        .write(file_name_final.deref(), data.open(), &repo.encrypt)
+        .write(file_name_final.deref(), data.open(), &encrypt)
         .map(|stats| ())
         .map_err(Error::from)
 }
@@ -62,17 +64,13 @@ pub fn load(repo: &Repo, pc_id: &str, orig_file_name: &str, time_stamp: u64) -> 
 
 
     let r = Box::from(repo.repo.clone());
-
-    let r2 = Box::new(
-        repo.decrypt
-    );
+    let decrypt = repo.repo.unlock_decrypt(&*repo.decrypt)?;
 
     let mut r3 = Box::from(writer);
 
     spawn(move|| {
-
         r
-            .read(file_name_final.deref(), &mut r3 , r2.deref());
+            .read(file_name_final.deref(), &mut r3 , &decrypt);
 
             ()
     });
