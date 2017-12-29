@@ -6,13 +6,22 @@ extern crate rbackup;
 extern crate config;
 extern crate rocket;
 #[macro_use]
-extern crate log;
+extern crate slog;
+extern crate slog_async;
+extern crate slog_term;
+extern crate pipe;
+extern crate rdedup_lib as rdedup;
+
+use std::sync::Arc;
 
 use failure::Error;
 use rocket::Data;
 use rocket::response::Stream;
 use rocket::State;
-use std::process::ChildStdout;
+use std::io::{Error as IoError, ErrorKind};
+
+use std::path::Path;
+use rdedup::{Repo as RdedupRepo};
 
 #[derive(FromForm)]
 struct UploadMetadata {
@@ -34,42 +43,66 @@ struct ListMetadata {
 
 #[get("/list?<metadata>")]
 fn list(config: State<AppConfig>, metadata: ListMetadata) -> Result<String, Error> {
-    rbackup::list(&config.repo_dir, &metadata.pc_id)
+    rbackup::list(&config.repo, &metadata.pc_id)
 }
 
 #[get("/download?<metadata>")]
-fn download(config: State<AppConfig>, metadata: DownloadMetadata) -> Result<Stream<ChildStdout>, Error> {
-    rbackup::load(&config.repo_dir, &metadata.pc_id, &metadata.orig_file_name, metadata.time_stamp)
-        .map(|stdout| {
-            Stream::from(
-                stdout
-            )
-        })
+fn download(config: State<AppConfig>, metadata: DownloadMetadata) -> Result<Stream<pipe::PipeReader>, Error> {
+
+    rbackup::load(&config.repo, &metadata.pc_id, &metadata.orig_file_name, metadata.time_stamp)
+        .map(Stream::from)
 }
 
 #[post("/upload?<metadata>", format = "application/octet-stream", data = "<data>")]
 fn upload(config: State<AppConfig>, data: Data, metadata: UploadMetadata) -> &'static str {
-    match rbackup::save(&config.repo_dir, &metadata.pc_id, &metadata.orig_file_name, data) {
+    match rbackup::save(&config.repo, &metadata.pc_id, &metadata.orig_file_name, data) {
         Ok(()) => {
             "ok"
         }
         Err(e) => {
-            warn!("{}", e);
+            warn!(config.logger, "{}", e);
             "FAIL"
         }
     }
 }
 
+
 struct AppConfig {
-    repo_dir: String
+    repo: rbackup::Repo,
+    logger: slog::Logger
 }
 
+
 fn main() {
-    let settings = config::Config::default()
-        .merge(config::File::with_name("Settings")).unwrap();
+//    let decorator = slog_term::PlainDecorator::new(std::io::stdout());
+//    let drain = slog_term::CompactFormat::new(decorator).build().fuse();
+//    let drain = slog_async::Async::new(drain).build().fuse();
+
+    let logger = slog::Logger::root(slog::Discard, o!());
+
+    let mut config = config::Config::default();
+    config.merge(config::File::with_name("Settings")).unwrap();
+
+    let repo = config.get_str("repo_dir")
+        .map_err(|e| IoError::new(ErrorKind::NotFound, e))
+        .and_then(|repo_dir| {
+            RdedupRepo::open(&Path::new(&repo_dir), logger.clone())
+        }).expect("Could not open repo");
+
+    let config = Arc::new(config);
+    let config_dec = Arc::clone(&config);
+    let dec = Box::new(move || { config_dec.get_str("repo_pass").map_err(|e| IoError::new(ErrorKind::NotFound, e)) });
+
+    let config_enc = Arc::clone(&config);
+    let enc = Box::new(move || { config_enc.get_str("repo_pass").map_err(|e| IoError::new(ErrorKind::NotFound, e)) });
 
     let config = AppConfig {
-        repo_dir: settings.get_str("repo").expect("Could not extract repo path from config")
+        repo: rbackup::Repo {
+            repo,
+            decrypt: dec,
+            encrypt: enc
+        },
+        logger
     };
 
     rocket::ignite()
