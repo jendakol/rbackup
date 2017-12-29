@@ -43,10 +43,10 @@ pub fn save(repo: &Repo, pc_id: &str, orig_file_name: &str, data: Data) -> Resul
 
     debug!("Final name: {}", file_name_final);
 
-    let encrypt = repo.repo.unlock_encrypt(&*repo.encrypt)?;
+    let encrypt_handle = repo.repo.unlock_encrypt(&*repo.encrypt)?;
 
     repo.repo
-        .write(file_name_final.deref(), data.open(), &encrypt)
+        .write(file_name_final.deref(), data.open(), &encrypt_handle)
         .map(|stats| ())
         .map_err(Error::from)
 }
@@ -59,23 +59,16 @@ pub fn load(repo: &Repo, pc_id: &str, orig_file_name: &str, time_stamp: u64) -> 
     use std::thread::spawn;
 
     let (mut reader, mut writer) = pipe::pipe();
+    let mut writer = Box::from(writer);
 
-    let message = "Hello, world!";
-
-
-    let r = Box::from(repo.repo.clone());
-    let decrypt = repo.repo.unlock_decrypt(&*repo.decrypt)?;
-
-    let mut r3 = Box::from(writer);
+    let boxed_repo = Box::from(repo.repo.clone());
+    let decrypt_handle = repo.repo.unlock_decrypt(&*repo.decrypt)?;
 
     spawn(move|| {
-        r
-            .read(file_name_final.deref(), &mut r3 , &decrypt);
-
-            ()
+        boxed_repo.read(&file_name_final, &mut writer , &decrypt_handle);
+        // TODO handle error
+        ()
     });
-
-
 
     Ok(reader)
 }

@@ -524,7 +524,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "pipe"
-version = "0.0.2"
+version = "0.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
@@ -576,7 +576,7 @@ dependencies = [
  "failure_derive 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "multimap 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "pipe 0.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "pipe 0.0.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "rdedup-lib 2.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rocket 0.3.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "rocket_codegen 0.3.5 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1185,7 +1185,7 @@ dependencies = [
 "checksum pear 0.0.12 (registry+https://github.com/rust-lang/crates.io-index)" = "b5c2dabd6c1650d9bfac8e46be7b518b31c3885ab4412de1aca330938616c5bd"
 "checksum pear_codegen 0.0.12 (registry+https://github.com/rust-lang/crates.io-index)" = "df863bb78b3ee6b049278324eea8df6b2553a8db9a3504c0e32cfcc17bc8d18c"
 "checksum percent-encoding 1.0.1 (registry+https://github.com/rust-lang/crates.io-index)" = "31010dd2e1ac33d5b46a5b413495239882813e0369f8ed8a5e266f173602f831"
-"checksum pipe 0.0.2 (registry+https://github.com/rust-lang/crates.io-index)" = "27890d6aa0b46808ddf1f623fc7b6dac06fc27e4a71fabaf589bceaffa232be5"
+"checksum pipe 0.0.3 (registry+https://github.com/rust-lang/crates.io-index)" = "9cc8bd4a29fc75fb70561e09cd26cd67bc8a75df0777a86247e7540e231f30d9"
 "checksum pkg-config 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)" = "3a8b4c6b8165cd1a1cd4b9b120978131389f64bdaf456435caa41e630edba903"
 "checksum quote 0.3.15 (registry+https://github.com/rust-lang/crates.io-index)" = "7a6e920b65c65f10b2ae65c831a81a073a89edd28c7cce89475bff467ab4167a"
 "checksum rand 0.3.18 (registry+https://github.com/rust-lang/crates.io-index)" = "6475140dfd8655aeb72e1fd4b7a1cc1c202be65d71669476e392fe62532b9edd"

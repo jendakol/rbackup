@@ -18,11 +18,10 @@ use failure::Error;
 use rocket::Data;
 use rocket::response::Stream;
 use rocket::State;
-use std::process::ChildStdout;
-use std::io::{Error as IoError, ErrorKind, Read};
+use std::io::{Error as IoError, ErrorKind};
 
 use std::path::Path;
-use rdedup::{Repo as RdedupRepo, DecryptHandle, EncryptHandle};
+use rdedup::{Repo as RdedupRepo};
 
 #[derive(FromForm)]
 struct UploadMetadata {
