@@ -18,9 +18,14 @@ pub struct File {
     pub id: u32,
     pub device_id: String,
     pub original_name: String,
+    pub versions: Vec<FileVersion>
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, Serialize)]
+pub struct FileVersion {
     pub size: u32,
     pub hash: String,
-    pub versions: Vec<NaiveDateTime>
+    pub created: NaiveDateTime
 }
 
 pub struct Dao {
@@ -36,28 +41,27 @@ impl Dao {
         }
     }
 
+
     pub fn list_files(&self, device_id: &str) -> mysql::error::Result<Vec<File>> {
         self.pool.prep_exec(format!("select files.id, device_id, original_name, size, hash, created from {}.files join {}.files_versions on {}.files_versions.file_id = {}.files.id where device_id=:device_id", self.db_name, self.db_name, self.db_name, self.db_name), params! { "device_id" => device_id})
             .map(|result| {
                 result.map(|x| x.unwrap()).map(|row| {
-                    let (id, device_id, original_name, size, hash, version) = mysql::from_row(row);
+                    let (id, device_id, original_name, size, hash, created) = mysql::from_row(row);
 
                     (
-                        (id,
-                         device_id,
-                         original_name,
-                         size,
-                         hash),
-                        version
+                        (id, device_id, original_name),
+                        FileVersion {
+                            size,
+                            hash,
+                            created
+                        }
                     )
-                }).collect::<multimap::MultiMap<(u32, String, String, u32, String), NaiveDateTime>>()
-                    .into_iter().map(|((id, device_id, original_name, size, hash), versions)| {
+                }).collect::<multimap::MultiMap<(u32, String, String), FileVersion>>()
+                    .into_iter().map(|((id, device_id, original_name), versions)| {
                     File {
                         id,
                         device_id,
                         original_name,
-                        size,
-                        hash,
                         versions
                     }
                 }).collect()
