@@ -10,7 +10,10 @@ extern crate slog;
 extern crate slog_async;
 extern crate slog_term;
 extern crate pipe;
+extern crate serde;
+extern crate serde_json;
 extern crate rdedup_lib as rdedup;
+extern crate mysql;
 
 use std::sync::Arc;
 
@@ -23,32 +26,33 @@ use std::io::{Error as IoError, ErrorKind};
 use std::path::Path;
 use rdedup::{Repo as RdedupRepo};
 
+use rbackup::dao::Dao;
+
 #[derive(FromForm)]
 struct UploadMetadata {
     orig_file_name: String,
-    pc_id: String
+    pc_id: String,
 }
 
 #[derive(FromForm)]
 struct DownloadMetadata {
     orig_file_name: String,
     time_stamp: u64,
-    pc_id: String
+    pc_id: String,
 }
 
 #[derive(FromForm)]
 struct ListMetadata {
-    pc_id: String
+    device_id: String
 }
 
 #[get("/list?<metadata>")]
 fn list(config: State<AppConfig>, metadata: ListMetadata) -> Result<String, Error> {
-    rbackup::list(&config.repo, &metadata.pc_id)
+    rbackup::list(&config.dao, &metadata.device_id)
 }
 
 #[get("/download?<metadata>")]
 fn download(config: State<AppConfig>, metadata: DownloadMetadata) -> Result<Stream<pipe::PipeReader>, Error> {
-
     rbackup::load(&config.repo, &metadata.pc_id, &metadata.orig_file_name, metadata.time_stamp)
         .map(Stream::from)
 }
@@ -69,11 +73,13 @@ fn upload(config: State<AppConfig>, data: Data, metadata: UploadMetadata) -> &'s
 
 struct AppConfig {
     repo: rbackup::Repo,
-    logger: slog::Logger
+    dao: Dao,
+    logger: slog::Logger,
 }
 
 
 fn main() {
+
 //    let decorator = slog_term::PlainDecorator::new(std::io::stdout());
 //    let drain = slog_term::CompactFormat::new(decorator).build().fuse();
 //    let drain = slog_async::Async::new(drain).build().fuse();
@@ -82,6 +88,8 @@ fn main() {
 
     let mut config = config::Config::default();
     config.merge(config::File::with_name("Settings")).unwrap();
+
+    // open Repo
 
     let repo = config.get_str("repo_dir")
         .map_err(|e| IoError::new(ErrorKind::NotFound, e))
@@ -96,13 +104,28 @@ fn main() {
     let config_enc = Arc::clone(&config);
     let enc = Box::new(move || { config_enc.get_str("repo_pass").map_err(|e| IoError::new(ErrorKind::NotFound, e)) });
 
+    // create DAO
+
+    let dao = Dao::new(&format!("mysql://{}:{}@{}:{}",
+                                config.get_str("db_user").unwrap(),
+                                config.get_str("db_pass").unwrap(),
+                                config.get_str("db_host").unwrap(),
+                                config.get_str("db_port").unwrap()),
+                       &config.get_str("db_name").unwrap(),
+    );
+
+    println!("{:?}", dao.get_devices());
+    println!("{:?}", dao.list_files("placka"));
+
+
     let config = AppConfig {
         repo: rbackup::Repo {
             repo,
             decrypt: dec,
-            encrypt: enc
+            encrypt: enc,
         },
-        logger
+        dao,
+        logger,
     };
 
     rocket::ignite()

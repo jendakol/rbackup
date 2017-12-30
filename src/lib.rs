@@ -5,25 +5,36 @@ extern crate env_logger;
 #[macro_use]
 extern crate log;
 extern crate time;
+extern crate chrono;
+#[macro_use]
+extern crate serde_derive;
+#[macro_use]
 extern crate serde_json;
 extern crate multimap;
 extern crate rocket;
 extern crate rdedup_lib as rdedup;
 extern crate pipe;
+#[macro_use]
+extern crate mysql;
+
+pub mod dao;
 
 use multimap::MultiMap;
 use failure::Error;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
+use chrono::prelude::*;
 use std::process::Stdio;
 use std::process::ChildStdout;
 use std::ops::Deref;
 use std::str;
 use rocket::data::Data;
-use rocket::response:: Stream;
+use rocket::response::Stream;
 use rdedup::{Repo as RdedupRepo, DecryptHandle, EncryptHandle};
 
 use std::io::{Write, Read, BufReader};
+
+use dao::Dao;
 
 pub struct Repo {
     pub repo: RdedupRepo,
@@ -64,8 +75,8 @@ pub fn load(repo: &Repo, pc_id: &str, orig_file_name: &str, time_stamp: u64) -> 
     let boxed_repo = Box::from(repo.repo.clone());
     let decrypt_handle = repo.repo.unlock_decrypt(&*repo.decrypt)?;
 
-    spawn(move|| {
-        boxed_repo.read(&file_name_final, &mut writer , &decrypt_handle);
+    spawn(move || {
+        boxed_repo.read(&file_name_final, &mut writer, &decrypt_handle);
         // TODO handle error
         ()
     });
@@ -73,30 +84,9 @@ pub fn load(repo: &Repo, pc_id: &str, orig_file_name: &str, time_stamp: u64) -> 
     Ok(reader)
 }
 
-pub fn list(repo: &Repo, pc_id: &str) -> Result<String, Error> {
-    repo.repo.list_names()
-        .map_err(Error::from)
-        .and_then(|output| {
-            let data = output.into_iter().filter_map(|l: String| {
-                let parts = l.split('#').collect::<Vec<&str>>();
-
-                match (parts.get(0), parts.get(1), parts.get(2).map(|num| num.parse::<u64>())) {
-                    (prefix, _, _) if prefix != Some(&pc_id.deref()) => None,
-                    (_, _, None) |
-                    (_, None, Some(Ok(_))) => None,
-                    (_, _, Some(Err(e))) => {
-                        error!("Wrong num: {}", e);
-                        None
-                    }
-                    (_, Some(name), Some(Ok(num))) => {
-                        let original_name = name.replace("|", "/").replace("!*!", "#");
-                        Some((original_name, num))
-                    }
-                }
-            }).collect::<MultiMap<String, _>>();
-
-            Ok(serde_json::to_string(&data)?)
-        })
+pub fn list(dao: &Dao, device_id: &str) -> Result<String, Error> {
+    let res = dao.list_files(device_id)?;
+    Ok(serde_json::to_string(&res)?)
 }
 
 fn to_final_name(pc_id: &str, orig_file_name: &str, time_stamp: u64) -> String {

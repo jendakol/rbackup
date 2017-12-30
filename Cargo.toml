@@ -24,3 +24,5 @@ slog = { version = "2.0.10", features = ["max_level_trace", "release_max_level_t
 slog-term = "2"
 slog-async = "2"
 pipe = "0.0.3"
+mysql = { version = "*", features = ["ssl"] }
+chrono = { version = "0.4", features = ["serde", "rustc-serialize"] }
