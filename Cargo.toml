@@ -26,3 +26,4 @@ slog-async = "2"
 pipe = "0.0.3"
 mysql = { version = "*", features = ["ssl"] }
 chrono = { version = "0.4", features = ["serde", "rustc-serialize"] }
+sha2 = "0.7.0"

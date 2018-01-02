@@ -25,7 +25,8 @@ pub struct File {
 pub struct FileVersion {
     pub size: u32,
     pub hash: String,
-    pub created: NaiveDateTime
+    pub created: NaiveDateTime,
+    pub storage_name: String
 }
 
 pub struct Dao {
@@ -41,19 +42,23 @@ impl Dao {
         }
     }
 
+    pub fn save_new_version(&self, old_file: &File, new_file_version: FileVersion) -> mysql::error::Result<File> {
+        unimplemented!()
+    }
 
     pub fn list_files(&self, device_id: &str) -> mysql::error::Result<Vec<File>> {
-        self.pool.prep_exec(format!("select files.id, device_id, original_name, size, hash, created from {}.files join {}.files_versions on {}.files_versions.file_id = {}.files.id where device_id=:device_id", self.db_name, self.db_name, self.db_name, self.db_name), params! { "device_id" => device_id})
+        self.pool.prep_exec(format!("select files.id, device_id, original_name, size, hash, created, storage_name from {}.files join {}.files_versions on {}.files_versions.file_id = {}.files.id where device_id=:device_id", self.db_name, self.db_name, self.db_name, self.db_name), params! { "device_id" => device_id})
             .map(|result| {
                 result.map(|x| x.unwrap()).map(|row| {
-                    let (id, device_id, original_name, size, hash, created) = mysql::from_row(row);
+                    let (id, device_id, original_name, size, hash, created, storage_name) = mysql::from_row(row);
 
                     (
                         (id, device_id, original_name),
                         FileVersion {
                             size,
                             hash,
-                            created
+                            created,
+                            storage_name
                         }
                     )
                 }).collect::<multimap::MultiMap<(u32, String, String), FileVersion>>()

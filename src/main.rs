@@ -30,8 +30,9 @@ use rbackup::dao::Dao;
 
 #[derive(FromForm)]
 struct UploadMetadata {
-    orig_file_name: String,
-    pc_id: String,
+    file_name: String,
+    file_sha256: String,
+    device_id: String,
 }
 
 #[derive(FromForm)]
@@ -58,14 +59,14 @@ fn download(config: State<AppConfig>, metadata: DownloadMetadata) -> Result<Stre
 }
 
 #[post("/upload?<metadata>", format = "application/octet-stream", data = "<data>")]
-fn upload(config: State<AppConfig>, data: Data, metadata: UploadMetadata) -> &'static str {
-    match rbackup::save(&config.repo, &metadata.pc_id, &metadata.orig_file_name, data) {
+fn upload(config: State<AppConfig>, data: Data, metadata: UploadMetadata) -> String {
+    match rbackup::save(&config.repo, &config.dao, &metadata.device_id, &metadata.file_name, &metadata.file_sha256, data) {
         Ok(()) => {
-            "ok"
+            String::from("ok")
         }
         Err(e) => {
             warn!(config.logger, "{}", e);
-            "FAIL"
+            format!("{}", e)
         }
     }
 }
@@ -128,10 +129,23 @@ fn main() {
         logger,
     };
 
-    rocket::ignite()
-        .mount("/", routes![upload])
-        .mount("/", routes![download])
-        .mount("/", routes![list])
-        .manage(config)
-        .launch();
+//    rocket::ignite()
+//        .mount("/", routes![upload])
+//        .mount("/", routes![download])
+//        .mount("/", routes![list])
+//        .manage(config)
+//        .launch();
+
+    use std::collections::HashMap;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let shared_map: Rc<RefCell<_>> = Rc::new(RefCell::new(HashMap::new()));
+    shared_map.borrow_mut().insert("africa", 92388);
+    shared_map.borrow_mut().insert("kyoto", 11837);
+    shared_map.borrow_mut().insert("piccadilly", 11826);
+    shared_map.borrow_mut().insert("marbles", 38);
+
+    println!("{:?}", shared_map)
+
 }
