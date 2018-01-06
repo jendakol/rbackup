@@ -41,7 +41,6 @@ use std::sync::Arc;
 use std::rc::Rc;
 use dao::Dao;
 
-use std::borrow::BorrowMut;
 use std::cell::RefCell;
 
 use std::collections::HashMap;
