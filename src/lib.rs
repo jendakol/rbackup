@@ -20,6 +20,7 @@ extern crate sha2;
 
 pub mod dao;
 pub mod failures;
+pub mod structs;
 
 use multimap::MultiMap;
 use failure::Error;
@@ -40,17 +41,12 @@ use sha2::{Sha256, Digest};
 use std::sync::Arc;
 use std::rc::Rc;
 use dao::Dao;
+use structs::*;
 
 use std::borrow::BorrowMut;
 use std::cell::RefCell;
 
 use std::collections::HashMap;
-
-pub struct Repo {
-    pub repo: RdedupRepo,
-    pub decrypt: Box<Fn() -> std::io::Result<String> + Send + Sync>,
-    pub encrypt: Box<Fn() -> std::io::Result<String> + Send + Sync>,
-}
 
 struct DigestDataStream {
     data_stream: DataStream,
@@ -70,41 +66,41 @@ impl DigestDataStream {
 //    }
 }
 
-impl Read for DigestDataStream {
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize, std::io::Error> {
-        self.data_stream
-            .read(buf)
-            .map(|s| {
-
-
-                use std::collections::HashMap;
-                use std::cell::RefCell;
-                use std::rc::Rc;
-
-                let shared_map: Rc<RefCell<_>> = Rc::new(RefCell::new(HashMap::new()));
-                shared_map.borrow_mut().insert("africa", 92388);
-                shared_map.borrow_mut().insert("kyoto", 11837);
-                shared_map.borrow_mut().insert("piccadilly", 11826);
-                shared_map.borrow_mut().insert("marbles", 38);
-
-                println!("{:?}", shared_map);
-
-
+//impl Read for DigestDataStream {
+//    fn read(&mut self, buf: &mut [u8]) -> Result<usize, std::io::Error> {
+//        self.data_stream
+//            .read(buf)
+//            .map(|s| {
+//
+//
+//                use std::collections::HashMap;
+//                use std::cell::RefCell;
+//                use std::rc::Rc;
+//
 //                let shared_map: Rc<RefCell<_>> = Rc::new(RefCell::new(HashMap::new()));
 //                shared_map.borrow_mut().insert("africa", 92388);
 //                shared_map.borrow_mut().insert("kyoto", 11837);
 //                shared_map.borrow_mut().insert("piccadilly", 11826);
 //                shared_map.borrow_mut().insert("marbles", 38);
-
-//                self.hasher.borrow_mut().insert();
-
-//                let mut h = self.hasher.input();
-//                h.input(&buf[0..s]);
-//                h.result();
-                s
-            })
-    }
-}
+//
+//                println!("{:?}", shared_map);
+//
+//
+////                let shared_map: Rc<RefCell<_>> = Rc::new(RefCell::new(HashMap::new()));
+////                shared_map.borrow_mut().insert("africa", 92388);
+////                shared_map.borrow_mut().insert("kyoto", 11837);
+////                shared_map.borrow_mut().insert("piccadilly", 11826);
+////                shared_map.borrow_mut().insert("marbles", 38);
+//
+////                self.hasher.borrow_mut().insert();
+//
+////                let mut h = self.hasher.input();
+////                h.input(&buf[0..s]);
+////                h.result();
+//                s
+//            })
+//    }
+//}
 //
 //impl Clone for DigestDataStream {
 //    fn clone(&self) -> DigestDataStream {
@@ -115,58 +111,57 @@ impl Read for DigestDataStream {
 //    }
 //}
 
-pub fn save(repo: &Repo, dao: &Dao, pc_id: &str, orig_file_name: &str, orig_file_hash: &str, data: Data) -> Result<(), Error> {
+pub fn save(repo: &Repo, dao: &Dao, uploaded_file: UploadedFile, data: Data) -> Result<(), Error> {
     let current_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)?;
 
-    let time_stamp = current_time.as_secs() * 1000 + u64::from(current_time.subsec_nanos()) / 1000;
+    let time_stamp = NaiveDateTime::from_timestamp(current_time.as_secs() as i64, current_time.subsec_nanos());
 
     debug!("Current time: {}", time_stamp);
 
-    let file_name_final = to_final_name(pc_id, orig_file_name, time_stamp);
+    let file_name_final = to_final_name(&uploaded_file.device_id, &uploaded_file.name, time_stamp);
 
     debug!("Final name: {}", file_name_final);
 
     let encrypt_handle = repo.repo.unlock_encrypt(&*repo.encrypt)?;
 
-    let hasher = Sha256::default();
-    let stream = DigestDataStream::new(data.open(), Rc::new(RefCell::new(HashMap::new())));
+//    let hasher = Sha256::default();
+//    let stream = DigestDataStream::new(data.open(), Rc::new(RefCell::new(HashMap::new())));
+    let stream = data.open();
 
-    unimplemented!()
-//
-//    repo.repo
-//        .write(&file_name_final, stream, &encrypt_handle)
-//        .map_err(Error::from)
-//        .and_then(|stats| {
+    repo.repo
+        .write(&file_name_final, stream, &encrypt_handle)
+        .map_err(Error::from)
+        .and_then(|stats| {
+            // TODO check hash and size
 //            if to_hex_string(&hasher.result()) == orig_file_hash {
-//                Ok(orig_file_hash)
+//            Ok(&uploaded_file.sha256)
 //            } else {
 //                Err(Error::from(failures::CustomError::new("Hash of uploaded file is different than specified")))
 //            }
-////
-////            match to_hex_string(&hasher.result()) {
-////                orig_file_hash => Ok(orig_file_hash),
-////                _ => Err(Error::from(failures::CustomError::new("TODO")))
-////            }
-//        }).and_then(|hash| {
 //
-////
-////            let new_version = dao::FileVersion {
-////                size: 0,
-////                hash: "",
-////                created: NaiveDateTime::from(time_stamp),
-////                storage_name: file_name_final
-////            }
-////
-////            dao.save_new_version()
-////
-//        println!("Hash: {}", hash);
-//        Ok(())
-//    })
+//            match to_hex_string(&hasher.result()) {
+//                orig_file_hash => Ok(orig_file_hash),
+//                _ => Err(Error::from(failures::CustomError::new("TODO")))
+//            }
+            let hash: &str = &uploaded_file.sha256;
+            let old_file = dao.find_file(&uploaded_file.device_id, &uploaded_file.name)?;
+
+            let new_version = dao::FileVersion {
+                size: uploaded_file.size,
+                hash: String::from(hash),
+                created: time_stamp,
+                storage_name: file_name_final
+            };
+
+            dao.save_new_version(&uploaded_file, old_file, new_version)?;
+
+            Ok(())
+        })
 }
 
 pub fn load(repo: &Repo, pc_id: &str, orig_file_name: &str, time_stamp: u64) -> Result<pipe::PipeReader, Error> {
-    let file_name_final = Box::new(to_final_name(pc_id, orig_file_name, time_stamp));
+    let file_name_final = Box::new(to_final_name(pc_id, orig_file_name, NaiveDateTime::from_timestamp(time_stamp as i64, 0)));
 
     debug!("Requested name: {}", file_name_final);
 
@@ -192,12 +187,12 @@ pub fn list(dao: &Dao, device_id: &str) -> Result<String, Error> {
     Ok(serde_json::to_string(&res)?)
 }
 
-fn to_final_name(pc_id: &str, orig_file_name: &str, time_stamp: u64) -> String {
+fn to_final_name(pc_id: &str, orig_file_name: &str, time_stamp: NaiveDateTime) -> String {
     let mut hasher = Sha256::default();
 
     hasher.input(pc_id.as_bytes());
     hasher.input(orig_file_name.as_bytes());
-    hasher.input(&transform_u64_to_bytes(time_stamp));
+    hasher.input(&transform_u32_to_bytes(time_stamp.second()));
 
     to_hex_string(&hasher.result())
 }
@@ -220,4 +215,13 @@ fn transform_u64_to_bytes(x: u64) -> [u8; 8] {
     let b8: u8 = (x & 0xff) as u8;
 
     return [b1, b2, b3, b4, b5, b6, b7, b8]
+}
+
+fn transform_u32_to_bytes(x: u32) -> [u8; 4] {
+    let b1: u8 = ((x >> 24) & 0xff) as u8;
+    let b2: u8 = ((x >> 16) & 0xff) as u8;
+    let b3: u8 = ((x >> 8) & 0xff) as u8;
+    let b4: u8 = (x & 0xff) as u8;
+
+    return [b1, b2, b3, b4]
 }

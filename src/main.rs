@@ -26,12 +26,15 @@ use std::io::{Error as IoError, ErrorKind};
 use std::path::Path;
 use rdedup::{Repo as RdedupRepo};
 
+use rbackup::structs;
+use rbackup::structs::*;
 use rbackup::dao::Dao;
 
 #[derive(FromForm)]
 struct UploadMetadata {
     file_name: String,
     file_sha256: String,
+    file_size: u32,
     device_id: String,
 }
 
@@ -60,7 +63,14 @@ fn download(config: State<AppConfig>, metadata: DownloadMetadata) -> Result<Stre
 
 #[post("/upload?<metadata>", format = "application/octet-stream", data = "<data>")]
 fn upload(config: State<AppConfig>, data: Data, metadata: UploadMetadata) -> String {
-    match rbackup::save(&config.repo, &config.dao, &metadata.device_id, &metadata.file_name, &metadata.file_sha256, data) {
+    let uploaded_file_metadata = UploadedFile {
+        name: String::from(metadata.file_name),
+        sha256: String::from(metadata.file_sha256),
+        size: metadata.file_size,
+        device_id: String::from(metadata.device_id)
+    };
+
+    match rbackup::save(&config.repo, &config.dao,uploaded_file_metadata, data) {
         Ok(()) => {
             String::from("ok")
         }
@@ -73,7 +83,7 @@ fn upload(config: State<AppConfig>, data: Data, metadata: UploadMetadata) -> Str
 
 
 struct AppConfig {
-    repo: rbackup::Repo,
+    repo: structs::Repo,
     dao: Dao,
     logger: slog::Logger,
 }
@@ -120,7 +130,7 @@ fn main() {
 
 
     let config = AppConfig {
-        repo: rbackup::Repo {
+        repo: structs::Repo {
             repo,
             decrypt: dec,
             encrypt: enc,
@@ -129,23 +139,22 @@ fn main() {
         logger,
     };
 
-//    rocket::ignite()
-//        .mount("/", routes![upload])
-//        .mount("/", routes![download])
-//        .mount("/", routes![list])
-//        .manage(config)
-//        .launch();
+    rocket::ignite()
+        .mount("/", routes![upload])
+        .mount("/", routes![download])
+        .mount("/", routes![list])
+        .manage(config)
+        .launch();
 
-    use std::collections::HashMap;
-    use std::cell::RefCell;
-    use std::rc::Rc;
-
-    let shared_map: Rc<RefCell<_>> = Rc::new(RefCell::new(HashMap::new()));
-    shared_map.borrow_mut().insert("africa", 92388);
-    shared_map.borrow_mut().insert("kyoto", 11837);
-    shared_map.borrow_mut().insert("piccadilly", 11826);
-    shared_map.borrow_mut().insert("marbles", 38);
-
-    println!("{:?}", shared_map)
-
+//    use std::collections::HashMap;
+//    use std::cell::RefCell;
+//    use std::rc::Rc;
+//
+//    let shared_map: Rc<RefCell<_>> = Rc::new(RefCell::new(HashMap::new()));
+//    shared_map.borrow_mut().insert("africa", 92388);
+//    shared_map.borrow_mut().insert("kyoto", 11837);
+//    shared_map.borrow_mut().insert("piccadilly", 11826);
+//    shared_map.borrow_mut().insert("marbles", 38);
+//
+//    println!("{:?}", shared_map)
 }
