@@ -43,7 +43,6 @@ use std::rc::Rc;
 use dao::Dao;
 use structs::*;
 
-use std::borrow::BorrowMut;
 use std::cell::RefCell;
 
 use std::collections::HashMap;
