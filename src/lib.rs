@@ -77,7 +77,7 @@ pub fn save(repo: &Repo, dao: &Dao, uploaded_file: UploadedFile, data: Data) -> 
 
     debug!("Current time: {}", time_stamp);
 
-    let file_name_final = to_final_name(&uploaded_file.device_id, &uploaded_file.name, time_stamp);
+    let file_name_final = to_storage_name(&uploaded_file.device_id, &uploaded_file.name, time_stamp);
 
     debug!("Final name: {}", file_name_final);
 
@@ -107,6 +107,7 @@ pub fn save(repo: &Repo, dao: &Dao, uploaded_file: UploadedFile, data: Data) -> 
 
         // TODO check whether there is not already last version with the same hash
         let new_version = dao::FileVersion {
+            version: 0, // cannot know now, will be filled in after DB insertion
             size: uploaded_file.size,
             hash: uploaded_file.sha256.clone(),
             created: time_stamp,
@@ -119,10 +120,9 @@ pub fn save(repo: &Repo, dao: &Dao, uploaded_file: UploadedFile, data: Data) -> 
     })
 }
 
-pub fn load(repo: &Repo, pc_id: &str, orig_file_name: &str, time_stamp: u64) -> Result<pipe::PipeReader, Error> {
-    let file_name_final = Box::new(to_final_name(pc_id, orig_file_name, NaiveDateTime::from_timestamp(time_stamp as i64, 0)));
-
-    debug!("Requested name: {}", file_name_final);
+pub fn load(repo: &Repo, dao: &Dao, version_id: u32) -> Result<pipe::PipeReader, Error> {
+    // TODO return 404 if not found
+    let storage_name = dao.get_storage_name(version_id)?.unwrap();
 
     use std::thread::spawn;
 
@@ -133,7 +133,7 @@ pub fn load(repo: &Repo, pc_id: &str, orig_file_name: &str, time_stamp: u64) -> 
     let decrypt_handle = repo.repo.unlock_decrypt(&*repo.decrypt)?;
 
     spawn(move || {
-        boxed_repo.read(&file_name_final, &mut writer, &decrypt_handle);
+        boxed_repo.read(&storage_name, &mut writer, &decrypt_handle);
         // TODO handle error
         ()
     });
@@ -146,7 +146,7 @@ pub fn list(dao: &Dao, device_id: &str) -> Result<String, Error> {
     Ok(serde_json::to_string(&res)?)
 }
 
-fn to_final_name(pc_id: &str, orig_file_name: &str, time_stamp: NaiveDateTime) -> String {
+fn to_storage_name(pc_id: &str, orig_file_name: &str, time_stamp: NaiveDateTime) -> String {
     let mut hasher = Sha256::default();
 
     hasher.input(pc_id.as_bytes());

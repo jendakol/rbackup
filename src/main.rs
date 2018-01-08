@@ -40,9 +40,7 @@ struct UploadMetadata {
 
 #[derive(FromForm)]
 struct DownloadMetadata {
-    orig_file_name: String,
-    time_stamp: u64,
-    pc_id: String,
+    file_version_id: u32,
 }
 
 #[derive(FromForm)]
@@ -57,7 +55,7 @@ fn list(config: State<AppConfig>, metadata: ListMetadata) -> Result<String, Erro
 
 #[get("/download?<metadata>")]
 fn download(config: State<AppConfig>, metadata: DownloadMetadata) -> Result<Stream<pipe::PipeReader>, Error> {
-    rbackup::load(&config.repo, &metadata.pc_id, &metadata.orig_file_name, metadata.time_stamp)
+    rbackup::load(&config.repo, &config.dao, metadata.file_version_id)
         .map(Stream::from)
 }
 
@@ -70,7 +68,7 @@ fn upload(config: State<AppConfig>, data: Data, metadata: UploadMetadata) -> Str
         device_id: String::from(metadata.device_id)
     };
 
-    match rbackup::save(&config.repo, &config.dao,uploaded_file_metadata, data) {
+    match rbackup::save(&config.repo, &config.dao, uploaded_file_metadata, data) {
         Ok(()) => {
             String::from("ok")
         }

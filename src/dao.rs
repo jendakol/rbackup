@@ -25,6 +25,7 @@ pub struct File {
 
 #[derive(Debug, PartialEq, Eq, Hash, Serialize, Clone)]
 pub struct FileVersion {
+    pub version: u32,
     pub size: u64,
     pub hash: String,
     pub created: NaiveDateTime,
@@ -95,18 +96,19 @@ impl Dao {
 
     pub fn find_file(&self, device_id: &str, orig_file_name: &str) -> mysql::error::Result<Option<File>> {
         self.pool.prep_exec(
-            format!("select files.id, device_id, original_name, size, hash, created, storage_name from {}.files join {}.files_versions on {}.files_versions.file_id = {}.files.id where device_id=:device_id and original_name=:original_name",
+            format!("select files.id, device_id, original_name, files_versions.id, size, hash, created, storage_name from {}.files join {}.files_versions on {}.files_versions.file_id = {}.files.id where device_id=:device_id and original_name=:original_name",
                     self.db_name, self.db_name, self.db_name, self.db_name),
             params! { "device_id" => device_id, "original_name" => orig_file_name}
         ).map(|result| {
             if result.more_results_exists() {
                 // TODO optimize
                 result.map(|x| x.unwrap()).map(|row| {
-                    let (id, device_id, original_name, size, hash, created, storage_name) = mysql::from_row(row);
+                    let (id, device_id, original_name, versionid, size, hash, created, storage_name) = mysql::from_row(row);
 
                     (
                         (id, device_id, original_name),
                         FileVersion {
+                            version: versionid,
                             size,
                             hash,
                             created,
@@ -130,17 +132,30 @@ impl Dao {
         })
     }
 
+    pub fn get_storage_name(&self, version_id: u32) -> mysql::error::Result<Option<String>> {
+        self.pool.prep_exec(format!("select storage_name from {}.files_versions where id=:version_id", self.db_name),
+                            params! {"version_id" => version_id})
+            .map(|result|{
+                result.map(|r| r.unwrap())
+                    .map(|row|{
+                        mysql::from_row(row)
+                    })
+                    .into_iter().next()
+            })
+    }
+
     pub fn list_files(&self, device_id: &str) -> mysql::error::Result<Vec<File>> {
         self.pool.prep_exec(
-            format!("select files.id, device_id, original_name, size, hash, created, storage_name from {}.files join {}.files_versions on {}.files_versions.file_id = {}.files.id where device_id=:device_id",
+            format!("select files.id, device_id, original_name, files_versions.id, size, hash, created, storage_name from {}.files join {}.files_versions on {}.files_versions.file_id = {}.files.id where device_id=:device_id",
                     self.db_name, self.db_name, self.db_name, self.db_name), params! { "device_id" => device_id}
         ).map(|result| {
             result.map(|x| x.unwrap()).map(|row| {
-                let (id, device_id, original_name, size, hash, created, storage_name) = mysql::from_row(row);
+                let (id, device_id, original_name, versionid, size, hash, created, storage_name) = mysql::from_row(row);
 
                 (
                     (id, device_id, original_name),
                     FileVersion {
+                        version: versionid,
                         size,
                         hash,
                         created,
