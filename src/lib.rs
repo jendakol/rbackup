@@ -19,7 +19,7 @@ extern crate mysql;
 extern crate sha2;
 
 pub mod dao;
-pub mod failures;
+mod failures;
 pub mod structs;
 
 use multimap::MultiMap;
@@ -65,41 +65,41 @@ impl DigestDataStream {
 //    }
 }
 
-//impl Read for DigestDataStream {
-//    fn read(&mut self, buf: &mut [u8]) -> Result<usize, std::io::Error> {
-//        self.data_stream
-//            .read(buf)
-//            .map(|s| {
-//
-//
-//                use std::collections::HashMap;
-//                use std::cell::RefCell;
-//                use std::rc::Rc;
-//
+impl Read for DigestDataStream {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, std::io::Error> {
+        self.data_stream
+            .read(buf)
+            .map(|s| {
+
+
+                use std::collections::HashMap;
+                use std::cell::RefCell;
+                use std::rc::Rc;
+
+                let shared_map: Rc<RefCell<_>> = Rc::new(RefCell::new(HashMap::new()));
+                shared_map.borrow_mut().insert("africa", 92388);
+                shared_map.borrow_mut().insert("kyoto", 11837);
+                shared_map.borrow_mut().insert("piccadilly", 11826);
+                shared_map.borrow_mut().insert("marbles", 38);
+
+                println!("{:?}", shared_map);
+
+
 //                let shared_map: Rc<RefCell<_>> = Rc::new(RefCell::new(HashMap::new()));
 //                shared_map.borrow_mut().insert("africa", 92388);
 //                shared_map.borrow_mut().insert("kyoto", 11837);
 //                shared_map.borrow_mut().insert("piccadilly", 11826);
 //                shared_map.borrow_mut().insert("marbles", 38);
-//
-//                println!("{:?}", shared_map);
-//
-//
-////                let shared_map: Rc<RefCell<_>> = Rc::new(RefCell::new(HashMap::new()));
-////                shared_map.borrow_mut().insert("africa", 92388);
-////                shared_map.borrow_mut().insert("kyoto", 11837);
-////                shared_map.borrow_mut().insert("piccadilly", 11826);
-////                shared_map.borrow_mut().insert("marbles", 38);
-//
-////                self.hasher.borrow_mut().insert();
-//
-////                let mut h = self.hasher.input();
-////                h.input(&buf[0..s]);
-////                h.result();
-//                s
-//            })
-//    }
-//}
+
+//                self.hasher.borrow_mut().insert();
+
+//                let mut h = self.hasher.input();
+//                h.input(&buf[0..s]);
+//                h.result();
+                s
+            })
+    }
+}
 //
 //impl Clone for DigestDataStream {
 //    fn clone(&self) -> DigestDataStream {
