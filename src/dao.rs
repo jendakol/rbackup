@@ -25,7 +25,7 @@ pub struct File {
 
 #[derive(Debug, PartialEq, Eq, Hash, Serialize, Clone)]
 pub struct FileVersion {
-    pub size: u32,
+    pub size: u64,
     pub hash: String,
     pub created: NaiveDateTime,
     pub storage_name: String

@@ -10,6 +10,6 @@ pub struct Repo {
 pub struct UploadedFile {
     pub name: String,
     pub sha256: String,
-    pub size: u32,
+    pub size: u64,
     pub device_id: String,
 }

@@ -35,32 +35,35 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use dao::Dao;
 use structs::*;
+use std::ops::Add;
 
 use std::cell::RefCell;
 
 struct DigestDataStream {
     data_stream: DataStream,
-    hasher: Arc<Mutex<Sha256>>
+    hasher: Arc<Mutex<Sha256>>,
+    size: Arc<Mutex<u64>>
 }
 
 impl DigestDataStream {
-    pub fn new(stream: DataStream, hasher: Arc<Mutex<Sha256>>) -> DigestDataStream {
+    pub fn new(stream: DataStream, hasher: Arc<Mutex<Sha256>>, size: Arc<Mutex<u64>>) -> DigestDataStream {
         DigestDataStream {
             data_stream: stream,
-            hasher
+            hasher,
+            size
         }
     }
-
 }
 
 impl Read for DigestDataStream {
-    // TODO also check size
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, std::io::Error> {
         self.data_stream
             .read(buf)
             .map(|s| {
                 let mut h = self.hasher.lock().unwrap();
                 h.input(&buf[0..s]);
+                *self.size.lock().unwrap() += s as u64;
+
                 s
             })
     }
@@ -81,19 +84,23 @@ pub fn save(repo: &Repo, dao: &Dao, uploaded_file: UploadedFile, data: Data) -> 
     let encrypt_handle = repo.repo.unlock_encrypt(&*repo.encrypt)?;
 
     let hasher = Arc::new(Mutex::new(Sha256::default()));
-    let stream = DigestDataStream::new(data.open(), hasher.clone());
+    let size = Arc::new(Mutex::new(0u64));
+    let stream = DigestDataStream::new(data.open(), hasher.clone(), size.clone());
 
     repo.repo
         .write(&file_name_final, stream, &encrypt_handle)
         .map_err(Error::from)
         .and_then(|stats| {
-            let res = Arc::try_unwrap(hasher).unwrap().into_inner().unwrap().result();
-            let hex_string = to_hex_string(&res);
+            let res_size: u64 = Arc::try_unwrap(size).unwrap().into_inner().unwrap();
 
-            if hex_string == uploaded_file.sha256.to_ascii_uppercase() {
+            let res_hash = Arc::try_unwrap(hasher).unwrap().into_inner().unwrap().result();
+            let hex_string = to_hex_string(&res_hash);
+
+            if hex_string == uploaded_file.sha256.to_ascii_uppercase() && res_size == uploaded_file.size {
                 Ok(())
             } else {
-                Err(Error::from(failures::CustomError::new("Hash of uploaded file is different than specified")))
+                // TODO delete the file
+                Err(Error::from(failures::CustomError::new("Hash or size of uploaded file is different than specified")))
             }
         }).and_then(|_| {
         let old_file = dao.find_file(&uploaded_file.device_id, &uploaded_file.name)?;
@@ -145,6 +152,7 @@ fn to_final_name(pc_id: &str, orig_file_name: &str, time_stamp: NaiveDateTime) -
     hasher.input(pc_id.as_bytes());
     hasher.input(orig_file_name.as_bytes());
     hasher.input(&transform_u32_to_bytes(time_stamp.second()));
+    hasher.input(&transform_u32_to_bytes(time_stamp.nanosecond()));
 
     to_hex_string(&hasher.result())
 }

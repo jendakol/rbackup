@@ -34,7 +34,7 @@ use rbackup::dao::Dao;
 struct UploadMetadata {
     file_name: String,
     file_sha256: String,
-    file_size: u32,
+    file_size: u64,
     device_id: String,
 }
 
