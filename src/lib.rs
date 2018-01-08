@@ -32,6 +32,7 @@ use rocket::data::DataStream;
 use std::io::{Write, Read};
 use sha2::{Sha256, Digest};
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use dao::Dao;
 use structs::*;
 
@@ -39,20 +40,17 @@ use std::cell::RefCell;
 
 struct DigestDataStream {
     data_stream: DataStream,
-    hasher: Rc<RefCell<Sha256>>
+    hasher: Arc<Mutex<Sha256>>
 }
 
 impl DigestDataStream {
-    pub fn new(stream: DataStream, hasher: Rc<RefCell<Sha256>>) -> DigestDataStream {
+    pub fn new(stream: DataStream, hasher: Arc<Mutex<Sha256>>) -> DigestDataStream {
         DigestDataStream {
             data_stream: stream,
             hasher
         }
     }
 
-//    pub fn result_sha256(&self) -> String {
-//        to_hex_string(&self.hasher.clone().result())
-//    }
 }
 
 impl Read for DigestDataStream {
@@ -61,21 +59,12 @@ impl Read for DigestDataStream {
         self.data_stream
             .read(buf)
             .map(|s| {
-                let mut h = self.hasher.borrow_mut();
+                let mut h = self.hasher.lock().unwrap();
                 h.input(&buf[0..s]);
                 s
             })
     }
 }
-//
-//impl Clone for DigestDataStream {
-//    fn clone(&self) -> DigestDataStream {
-//        DigestDataStream {
-//            data_stream: self.data_stream.clone(),
-//            hasher: self.hasher.clone()
-//        }
-//    }
-//}
 
 pub fn save(repo: &Repo, dao: &Dao, uploaded_file: UploadedFile, data: Data) -> Result<(), Error> {
     let current_time = SystemTime::now()
@@ -91,26 +80,28 @@ pub fn save(repo: &Repo, dao: &Dao, uploaded_file: UploadedFile, data: Data) -> 
 
     let encrypt_handle = repo.repo.unlock_encrypt(&*repo.encrypt)?;
 
-    let hasher = Sha256::default();
-    let stream = DigestDataStream::new(data.open(), Rc::new(RefCell::new(hasher)));
+    let hasher = Arc::new(Mutex::new(Sha256::default()));
+    let stream = DigestDataStream::new(data.open(), hasher.clone());
 
     repo.repo
         .write(&file_name_final, stream, &encrypt_handle)
         .map_err(Error::from)
         .and_then(|stats| {
-            // TODO is comparison right?
-            if to_hex_string(&hasher.result()) == uploaded_file.sha256 {
-                Ok(uploaded_file.sha256.deref())
+            let res = Arc::try_unwrap(hasher).unwrap().into_inner().unwrap().result();
+            let hex_string = to_hex_string(&res);
+
+            if hex_string == uploaded_file.sha256.to_ascii_uppercase() {
+                Ok(())
             } else {
                 Err(Error::from(failures::CustomError::new("Hash of uploaded file is different than specified")))
             }
-        }).and_then(|hash| {
+        }).and_then(|_| {
         let old_file = dao.find_file(&uploaded_file.device_id, &uploaded_file.name)?;
 
         // TODO check whether there is not already last version with the same hash
         let new_version = dao::FileVersion {
             size: uploaded_file.size,
-            hash: String::from(hash),
+            hash: uploaded_file.sha256.clone(),
             created: time_stamp,
             storage_name: file_name_final
         };

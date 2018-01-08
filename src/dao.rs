@@ -100,6 +100,7 @@ impl Dao {
             params! { "device_id" => device_id, "original_name" => orig_file_name}
         ).map(|result| {
             if result.more_results_exists() {
+                // TODO optimize
                 result.map(|x| x.unwrap()).map(|row| {
                     let (id, device_id, original_name, size, hash, created, storage_name) = mysql::from_row(row);
 

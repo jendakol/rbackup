@@ -125,8 +125,8 @@ fn main() {
                        &config.get_str("db_name").unwrap(),
     );
 
-    println!("{:?}", dao.get_devices());
-    println!("{:?}", dao.list_files("placka"));
+//    println!("{:?}", dao.get_devices());
+//    println!("{:?}", dao.list_files("placka"));
 
 
     let config = AppConfig {
