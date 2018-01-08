@@ -1,6 +1,5 @@
 extern crate failure;
 
-use failure::Error;
 use std::fmt;
 
 #[derive(Debug)]

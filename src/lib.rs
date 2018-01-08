@@ -22,41 +22,31 @@ pub mod dao;
 mod failures;
 pub mod structs;
 
-use multimap::MultiMap;
 use failure::Error;
-use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 use chrono::prelude::*;
-use std::process::Stdio;
-use std::process::ChildStdout;
 use std::ops::Deref;
 use std::str;
 use rocket::data::Data;
 use rocket::data::DataStream;
-use rocket::response::Stream;
-use rdedup::{Repo as RdedupRepo, DecryptHandle, EncryptHandle};
-use std::fmt;
-use std::io::{Write, Read, BufReader};
+use std::io::{Write, Read};
 use sha2::{Sha256, Digest};
-use std::sync::Arc;
 use std::rc::Rc;
 use dao::Dao;
 use structs::*;
 
 use std::cell::RefCell;
 
-use std::collections::HashMap;
-
 struct DigestDataStream {
     data_stream: DataStream,
-    hasher: Rc<RefCell<HashMap<String, u32>>>
+    hasher: Rc<RefCell<Sha256>>
 }
 
 impl DigestDataStream {
-    pub fn new(stream: DataStream, hasher: Rc<RefCell<HashMap<String, u32>>>) -> DigestDataStream {
+    pub fn new(stream: DataStream, hasher: Rc<RefCell<Sha256>>) -> DigestDataStream {
         DigestDataStream {
             data_stream: stream,
-            hasher: hasher
+            hasher
         }
     }
 
@@ -66,36 +56,13 @@ impl DigestDataStream {
 }
 
 impl Read for DigestDataStream {
+    // TODO also check size
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, std::io::Error> {
         self.data_stream
             .read(buf)
             .map(|s| {
-
-
-                use std::collections::HashMap;
-                use std::cell::RefCell;
-                use std::rc::Rc;
-
-                let shared_map: Rc<RefCell<_>> = Rc::new(RefCell::new(HashMap::new()));
-                shared_map.borrow_mut().insert("africa", 92388);
-                shared_map.borrow_mut().insert("kyoto", 11837);
-                shared_map.borrow_mut().insert("piccadilly", 11826);
-                shared_map.borrow_mut().insert("marbles", 38);
-
-                println!("{:?}", shared_map);
-
-
-//                let shared_map: Rc<RefCell<_>> = Rc::new(RefCell::new(HashMap::new()));
-//                shared_map.borrow_mut().insert("africa", 92388);
-//                shared_map.borrow_mut().insert("kyoto", 11837);
-//                shared_map.borrow_mut().insert("piccadilly", 11826);
-//                shared_map.borrow_mut().insert("marbles", 38);
-
-//                self.hasher.borrow_mut().insert();
-
-//                let mut h = self.hasher.input();
-//                h.input(&buf[0..s]);
-//                h.result();
+                let mut h = self.hasher.borrow_mut();
+                h.input(&buf[0..s]);
                 s
             })
     }
@@ -124,39 +91,34 @@ pub fn save(repo: &Repo, dao: &Dao, uploaded_file: UploadedFile, data: Data) -> 
 
     let encrypt_handle = repo.repo.unlock_encrypt(&*repo.encrypt)?;
 
-//    let hasher = Sha256::default();
-//    let stream = DigestDataStream::new(data.open(), Rc::new(RefCell::new(HashMap::new())));
-    let stream = data.open();
+    let hasher = Sha256::default();
+    let stream = DigestDataStream::new(data.open(), Rc::new(RefCell::new(hasher)));
 
     repo.repo
         .write(&file_name_final, stream, &encrypt_handle)
         .map_err(Error::from)
         .and_then(|stats| {
-            // TODO check hash and size
-//            if to_hex_string(&hasher.result()) == orig_file_hash {
-//            Ok(&uploaded_file.sha256)
-//            } else {
-//                Err(Error::from(failures::CustomError::new("Hash of uploaded file is different than specified")))
-//            }
-//
-//            match to_hex_string(&hasher.result()) {
-//                orig_file_hash => Ok(orig_file_hash),
-//                _ => Err(Error::from(failures::CustomError::new("TODO")))
-//            }
-            let hash: &str = &uploaded_file.sha256;
-            let old_file = dao.find_file(&uploaded_file.device_id, &uploaded_file.name)?;
+            // TODO is comparison right?
+            if to_hex_string(&hasher.result()) == uploaded_file.sha256 {
+                Ok(uploaded_file.sha256.deref())
+            } else {
+                Err(Error::from(failures::CustomError::new("Hash of uploaded file is different than specified")))
+            }
+        }).and_then(|hash| {
+        let old_file = dao.find_file(&uploaded_file.device_id, &uploaded_file.name)?;
 
-            let new_version = dao::FileVersion {
-                size: uploaded_file.size,
-                hash: String::from(hash),
-                created: time_stamp,
-                storage_name: file_name_final
-            };
+        // TODO check whether there is not already last version with the same hash
+        let new_version = dao::FileVersion {
+            size: uploaded_file.size,
+            hash: String::from(hash),
+            created: time_stamp,
+            storage_name: file_name_final
+        };
 
-            dao.save_new_version(&uploaded_file, old_file, new_version)?;
+        dao.save_new_version(&uploaded_file, old_file, new_version)?;
 
-            Ok(())
-        })
+        Ok(())
+    })
 }
 
 pub fn load(repo: &Repo, pc_id: &str, orig_file_name: &str, time_stamp: u64) -> Result<pipe::PipeReader, Error> {
