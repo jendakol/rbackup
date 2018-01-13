@@ -81,7 +81,7 @@ pub fn save(repo: &Repo, dao: &Dao, uploaded_file: UploadedFile, data: Data) -> 
 
     debug!("Final name: {}", file_name_final);
 
-    let encrypt_handle = repo.repo.unlock_encrypt(&*repo.encrypt)?;
+    let encrypt_handle = repo.repo.unlock_encrypt(&*repo.pass)?;
 
     let hasher = Arc::new(Mutex::new(Sha256::default()));
     let size = Arc::new(Mutex::new(0u64));
@@ -96,20 +96,15 @@ pub fn save(repo: &Repo, dao: &Dao, uploaded_file: UploadedFile, data: Data) -> 
             let res_hash = Arc::try_unwrap(hasher).unwrap().into_inner().unwrap().result();
             let hex_string = to_hex_string(&res_hash);
 
-            if hex_string == uploaded_file.sha256.to_ascii_uppercase() && res_size == uploaded_file.size {
-                Ok(())
-            } else {
-                // TODO delete the file
-                Err(Error::from(failures::CustomError::new("Hash or size of uploaded file is different than specified")))
-            }
-        }).and_then(|_| {
+            Ok((hex_string, res_size))
+        }).and_then(|(hash, size)| {
         let old_file = dao.find_file(&uploaded_file.device_id, &uploaded_file.name)?;
 
         // TODO check whether there is not already last version with the same hash
         let new_version = dao::FileVersion {
             version: 0, // cannot know now, will be filled in after DB insertion
-            size: uploaded_file.size,
-            hash: uploaded_file.sha256.clone(),
+            size: size,
+            hash: hash.clone(),
             created: time_stamp,
             storage_name: file_name_final
         };
@@ -130,7 +125,7 @@ pub fn load(repo: &Repo, dao: &Dao, version_id: u32) -> Result<pipe::PipeReader,
     let mut writer = Box::from(writer);
 
     let boxed_repo = Box::from(repo.repo.clone());
-    let decrypt_handle = repo.repo.unlock_decrypt(&*repo.decrypt)?;
+    let decrypt_handle = repo.repo.unlock_decrypt(&*repo.pass)?;
 
     spawn(move || {
         boxed_repo.read(&storage_name, &mut writer, &decrypt_handle);

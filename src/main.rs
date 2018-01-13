@@ -15,27 +15,25 @@ extern crate serde_json;
 extern crate rdedup_lib as rdedup;
 extern crate mysql;
 
-use std::sync::Arc;
-
 use failure::Error;
 use rocket::Data;
 use rocket::response::Stream;
 use rocket::State;
+use rocket::Outcome;
+use rocket::http::Status;
+use rocket::request::{self, Request, FromRequest};
+
 use std::io::{Error as IoError, ErrorKind};
 
 use std::path::Path;
 use rdedup::{Repo as RdedupRepo};
 
-use rbackup::structs;
 use rbackup::structs::*;
 use rbackup::dao::Dao;
 
 #[derive(FromForm)]
 struct UploadMetadata {
     file_name: String,
-    file_sha256: String,
-    file_size: u64,
-    device_id: String,
 }
 
 #[derive(FromForm)]
@@ -43,32 +41,63 @@ struct DownloadMetadata {
     file_version_id: u32,
 }
 
-#[derive(FromForm)]
-struct ListMetadata {
-    device_id: String
+struct ClientIdentity {
+    device_id: String,
+    repo_pass: String
 }
 
-#[get("/list?<metadata>")]
-fn list(config: State<AppConfig>, metadata: ListMetadata) -> Result<String, Error> {
-    rbackup::list(&config.dao, &metadata.device_id)
+impl<'a, 'r> FromRequest<'a, 'r> for ClientIdentity {
+    type Error = ();
+
+    fn from_request(request: &'a Request<'r>) -> request::Outcome<ClientIdentity, ()> {
+        // device id
+
+        let values: Vec<_> = request.headers().get("X-Device-Id").collect();
+        if values.len() != 1 {
+            return Outcome::Failure((Status::BadRequest, ()));
+        }
+
+        let device_id = String::from(values[0]);
+
+        // repo pass
+
+        let values: Vec<_> = request.headers().get("X-Repo-Pass").collect();
+        if values.len() != 1 {
+            return Outcome::Failure((Status::BadRequest, ()));
+        }
+
+        let repo_pass = String::from(values[0]);
+
+        return Outcome::Success(ClientIdentity {
+            device_id,
+            repo_pass
+        });
+    }
+}
+
+#[get("/list")]
+fn list(config: State<AppConfig>, client_identity: ClientIdentity) -> Result<String, Error> {
+    rbackup::list(&config.dao, &client_identity.device_id)
 }
 
 #[get("/download?<metadata>")]
-fn download(config: State<AppConfig>, metadata: DownloadMetadata) -> Result<Stream<pipe::PipeReader>, Error> {
-    rbackup::load(&config.repo, &config.dao, metadata.file_version_id)
+fn download(config: State<AppConfig>, client_identity: ClientIdentity, metadata: DownloadMetadata) -> Result<Stream<pipe::PipeReader>, Error> {
+    let repo = Repo::new(config.repo.clone(), client_identity.repo_pass);
+
+    rbackup::load(&repo, &config.dao, metadata.file_version_id)
         .map(Stream::from)
 }
 
 #[post("/upload?<metadata>", format = "application/octet-stream", data = "<data>")]
-fn upload(config: State<AppConfig>, data: Data, metadata: UploadMetadata) -> String {
+fn upload(config: State<AppConfig>, client_identity: ClientIdentity, metadata: UploadMetadata, data: Data) -> String {
     let uploaded_file_metadata = UploadedFile {
         name: String::from(metadata.file_name),
-        sha256: String::from(metadata.file_sha256),
-        size: metadata.file_size,
-        device_id: String::from(metadata.device_id)
+        device_id: String::from(client_identity.device_id)
     };
 
-    match rbackup::save(&config.repo, &config.dao, uploaded_file_metadata, data) {
+    let repo = Repo::new(config.repo.clone(), client_identity.repo_pass);
+
+    match rbackup::save(&repo, &config.dao, uploaded_file_metadata, data) {
         Ok(()) => {
             String::from("ok")
         }
@@ -81,7 +110,7 @@ fn upload(config: State<AppConfig>, data: Data, metadata: UploadMetadata) -> Str
 
 
 struct AppConfig {
-    repo: structs::Repo,
+    repo: RdedupRepo,
     dao: Dao,
     logger: slog::Logger,
 }
@@ -106,13 +135,6 @@ fn main() {
             RdedupRepo::open(&Path::new(&repo_dir), logger.clone())
         }).expect("Could not open repo");
 
-    let config = Arc::new(config);
-    let config_dec = Arc::clone(&config);
-    let dec = Box::new(move || { config_dec.get_str("repo_pass").map_err(|e| IoError::new(ErrorKind::NotFound, e)) });
-
-    let config_enc = Arc::clone(&config);
-    let enc = Box::new(move || { config_enc.get_str("repo_pass").map_err(|e| IoError::new(ErrorKind::NotFound, e)) });
-
     // create DAO
 
     let dao = Dao::new(&format!("mysql://{}:{}@{}:{}",
@@ -128,11 +150,7 @@ fn main() {
 
 
     let config = AppConfig {
-        repo: structs::Repo {
-            repo,
-            decrypt: dec,
-            encrypt: enc,
-        },
+        repo,
         dao,
         logger,
     };
