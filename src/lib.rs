@@ -72,11 +72,12 @@ pub fn login(repo: &rdedup::Repo, dao: &Dao, enc: &Encryptor, device_id: &str, r
     // TODO check existing record
 
     // TODO check secret file in repo
-    // TODO return HTTP 401
-    repo.unlock_decrypt(&*Box::new(move || { Ok(String::from(repo_pass)) }))?;
-
-    dao.login(enc, device_id, repo_pass)
+    repo.unlock_decrypt(&*Box::new(move || { Ok(String::from(repo_pass)) }))
         .map_err(Error::from)
+        .and_then(|_| {
+            dao.login(enc, device_id, repo_pass)
+                .map_err(Error::from)
+        })
 }
 
 pub fn authenticate(dao: &Dao, enc: &Encryptor, session_pass: &str) -> Result<Option<DeviceIdentity>, Error> {

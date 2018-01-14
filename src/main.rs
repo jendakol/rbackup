@@ -22,6 +22,7 @@ use rocket::State;
 use rocket::Outcome;
 use rocket::http::Status;
 use rocket::request::{self, Request, FromRequest};
+use rocket::response::status;
 
 use std::io::{Error as IoError, ErrorKind};
 
@@ -48,7 +49,7 @@ struct LoginMetadata {
     repo_pass: String
 }
 
-pub struct Headers {
+struct Headers {
     session_pass: String
 }
 
@@ -72,15 +73,21 @@ impl<'a, 'r> FromRequest<'a, 'r> for Headers {
 }
 
 #[get("/login?<metadata>")]
-fn login(config: State<AppConfig>, metadata: LoginMetadata) -> Result<String, Error> {
-    rbackup::login(&config.repo, &config.dao, &config.encryptor, &metadata.device_id, &metadata.repo_pass)
+fn login(config: State<AppConfig>, metadata: LoginMetadata) -> status::Custom<String> {
+    match rbackup::login(&config.repo, &config.dao, &config.encryptor, &metadata.device_id, &metadata.repo_pass) {
+        Ok(pass) => status::Custom(Status::Ok, pass),
+        Err(_) => status::Custom(Status::Unauthorized, "Cannot authenticate".to_string()),
+    }
 }
 
 #[get("/list")]
-fn list(config: State<AppConfig>, headers: Headers) -> Result<String, Error> {
-    let device = rbackup::authenticate(&config.dao, &config.encryptor, &headers.session_pass)?.expect("Could not find session");
-
-    rbackup::list(&config.dao, &device.id)
+fn list(config: State<AppConfig>, headers: Headers) -> status::Custom<String> {
+    authenticated(&config.dao, &config.encryptor, &headers.session_pass, |device| {
+        match rbackup::list(&config.dao, &device.id) {
+            Ok(list) => status_ok(list),
+            Err(e) => status_internal_server_error(e)
+        }
+    })
 }
 
 #[get("/download?<metadata>")]
@@ -95,6 +102,20 @@ fn download(config: State<AppConfig>, headers: Headers, metadata: DownloadMetada
 
 #[post("/upload?<metadata>", format = "application/octet-stream", data = "<data>")]
 fn upload(config: State<AppConfig>, headers: Headers, metadata: UploadMetadata, data: Data) -> Result<String, Error> {
+//    authenticated(&config.dao, &config.encryptor, &headers.session_pass, |device| {
+//        let uploaded_file_metadata = UploadedFile {
+//            name: String::from(metadata.file_name.clone()),
+//            device_id: String::from(device.id)
+//        };
+//
+//        let repo = Repo::new(config.repo.clone(), device.repo_pass);
+//
+//        match rbackup::save(&repo, &config.dao, uploaded_file_metadata, data) {
+//            Ok(_) => status_ok("ok".to_string()), // TODO return the file record
+//            Err(e) => status_internal_server_error(e)
+//        }
+//    })
+
     let device = rbackup::authenticate(&config.dao, &config.encryptor, &headers.session_pass)?.expect("Could not find session");
 
     let uploaded_file_metadata = UploadedFile {
@@ -108,7 +129,21 @@ fn upload(config: State<AppConfig>, headers: Headers, metadata: UploadMetadata, 
         .map(|_| { String::from("ok") })
 }
 
+fn authenticated<F: Fn(DeviceIdentity) -> status::Custom<String>>(dao: &Dao, enc: &Encryptor, session_pass: &str, f: F) -> status::Custom<String> {
+    match rbackup::authenticate(dao, enc, session_pass) {
+        Ok(Some(identity)) => f(identity),
+        Ok(None) => status::Custom(Status::Unauthorized, "Cannot find session".to_string()),
+        Err(e) => status::Custom(Status::InternalServerError, format!("{}", e))
+    }
+}
 
+fn status_internal_server_error(e: Error) -> status::Custom<String> {
+    status::Custom(Status::InternalServerError, format!("{}", e))
+}
+
+fn status_ok(s: String) -> status::Custom<String> {
+    status::Custom(Status::Ok, s)
+}
 struct AppConfig {
     repo: RdedupRepo,
     dao: Dao,
@@ -122,6 +157,8 @@ fn main() {
 //    let decorator = slog_term::PlainDecorator::new(std::io::stdout());
 //    let drain = slog_term::CompactFormat::new(decorator).build().fuse();
 //    let drain = slog_async::Async::new(drain).build().fuse();
+
+    // TODO commands
 
     let logger = slog::Logger::root(slog::Discard, o!());
 
@@ -152,7 +189,7 @@ fn main() {
 
     let tls_config = config.get_table("tls").unwrap();
 
-    let mut c = rocket::Config::build(rocket::config::Environment::Development)
+    let rocket_config = rocket::Config::build(rocket::config::Environment::Development)
         .address(config.get_str("address").expect("There is no bind address provided"))
         .port(config.get_int("port").expect("There is no bind port provided") as u16)
         .workers(config.get_int("workers").expect("There is no workers count provided") as u16)
@@ -160,7 +197,7 @@ fn main() {
              tls_config.get("key").expect("There is no TLS key path provided").to_string())
         .unwrap();
 
-    rocket::custom(c, true)
+    rocket::custom(rocket_config, true)
         .mount("/", routes![upload])
         .mount("/", routes![download])
         .mount("/", routes![list])

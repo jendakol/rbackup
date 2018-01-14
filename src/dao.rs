@@ -61,7 +61,6 @@ impl Dao {
                                    "storage_name" => &new_file_version.storage_name
                                    })?;
 
-                // TODO cloning :-(
                 let mut versions = file.versions;
                 versions.push(new_file_version.clone());
 
@@ -84,7 +83,6 @@ impl Dao {
 
                 let file_id = insert_file_result.last_insert_id();
 
-                // TODO clone :-(
                 let file = File {
                     id: file_id as u32,
                     device_id: uploaded_file.device_id.clone(),
