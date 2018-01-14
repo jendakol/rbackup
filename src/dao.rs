@@ -7,8 +7,12 @@ extern crate serde;
 
 use structs::*;
 
+use failure::Error;
 use dao::mysql::chrono::prelude::*;
-
+use sha2::*;
+use encryptor::Encryptor;
+use uuid::Uuid;
+use hex;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Device {
@@ -48,7 +52,7 @@ impl Dao {
     pub fn save_new_version(&self, uploaded_file: &UploadedFile, old_file: Option<File>, new_file_version: FileVersion) -> mysql::error::Result<File> {
         match old_file {
             Some(file) => {
-                let result = self.pool.prep_exec(
+                self.pool.prep_exec(
                     format!("insert into {}.files_versions (file_id, created, size, hash, storage_name) values (:file_id, :created, :size, :hash, :storage_name)", self.db_name),
                     params! {"file_id" => file.id,
                                    "created" => &new_file_version.created,
@@ -135,9 +139,9 @@ impl Dao {
     pub fn get_storage_name(&self, version_id: u32) -> mysql::error::Result<Option<String>> {
         self.pool.prep_exec(format!("select storage_name from {}.files_versions where id=:version_id", self.db_name),
                             params! {"version_id" => version_id})
-            .map(|result|{
+            .map(|result| {
                 result.map(|r| r.unwrap())
-                    .map(|row|{
+                    .map(|row| {
                         mysql::from_row(row)
                     })
                     .into_iter().next()
@@ -184,5 +188,46 @@ impl Dao {
                     }
                 }).collect()
             })
+    }
+
+    pub fn authenticate(&self, enc: &Encryptor, session_pass: &str) -> mysql::error::Result<Option<DeviceIdentity>> {
+        let hashed_pass: String = {
+            let mut hasher = Sha256::new();
+            hasher.input(session_pass.as_bytes());
+            hex::encode(&hasher.result())
+        };
+
+        self.pool.prep_exec(format!("SELECT device_id, pass from {}.sessions where id=:id", self.db_name), params!("id" => hashed_pass))
+            .map(|result| {
+                result.map(|x| x.unwrap()).map(|row| {
+                    let (device_id, pass) = mysql::from_row(row);
+
+                    let pass: String = pass;
+                    let pass = hex::decode(pass).expect("Could not convert hex to bytes");
+
+                    let real_pass = enc.decrypt(&pass, session_pass.as_bytes()).expect("Could not decrypt repo pass");
+
+                    DeviceIdentity {
+                        id: device_id,
+                        repo_pass: String::from_utf8(real_pass).expect("Could not convert repo pass to UTF-8")
+                    }
+                }).into_iter().next()
+            })
+    }
+
+    pub fn login(&self, enc: &Encryptor, device_id: &str, repo_pass: &str) -> Result<String, Error> {
+        let pass = Uuid::new_v4().hyphenated().to_string();
+
+        let hashed_pass: String = {
+            let mut hasher = Sha256::new();
+            hasher.input(pass.as_bytes());
+            hex::encode(&hasher.result())
+        };
+
+        let repo_pass: String = hex::encode(&enc.encrypt(repo_pass.as_bytes(), pass.as_bytes()).ok().unwrap());
+
+        self.pool.prep_exec(format!("insert into {}.sessions (id, device_id, pass) values(:id, :device_id, :pass )", self.db_name), params!("id" => hashed_pass, "device_id" => device_id, "pass" => repo_pass ))
+            .map(|_| { pass })
+            .map_err(Error::from)
     }
 }

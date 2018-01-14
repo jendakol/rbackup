@@ -19,3 +19,8 @@ pub struct UploadedFile {
     pub name: String,
     pub device_id: String,
 }
+
+pub struct DeviceIdentity {
+    pub id: String,
+    pub repo_pass: String
+}

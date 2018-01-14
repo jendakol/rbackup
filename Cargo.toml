@@ -27,3 +27,7 @@ pipe = "0.0.3"
 mysql = { version = "~12.1", features = ["ssl"] }
 chrono = { version = "0.4", features = ["serde", "rustc-serialize"] }
 sha2 = "0.7.0"
+uuid = { version = "0.4", features = ["serde", "v4"] }
+rust-crypto = "^0.2"
+arrayref = "0.3.4"
+hex = "~0.3"

@@ -1,5 +1,3 @@
-#[macro_use]
-extern crate failure_derive;
 extern crate failure;
 extern crate env_logger;
 #[macro_use]
@@ -8,7 +6,6 @@ extern crate time;
 extern crate chrono;
 #[macro_use]
 extern crate serde_derive;
-#[macro_use]
 extern crate serde_json;
 extern crate multimap;
 extern crate rocket;
@@ -17,27 +14,29 @@ extern crate pipe;
 #[macro_use]
 extern crate mysql;
 extern crate sha2;
+extern crate crypto;
+#[macro_use]
+extern crate arrayref;
+extern crate uuid;
+extern crate hex;
 
 pub mod dao;
 mod failures;
+pub mod encryptor;
 pub mod structs;
 
 use failure::Error;
 use std::time::{SystemTime, UNIX_EPOCH};
 use chrono::prelude::*;
-use std::ops::Deref;
 use std::str;
 use rocket::data::Data;
 use rocket::data::DataStream;
-use std::io::{Write, Read};
+use std::io::{Read};
 use sha2::{Sha256, Digest};
-use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use dao::Dao;
 use structs::*;
-use std::ops::Add;
-
-use std::cell::RefCell;
+use encryptor::Encryptor;
 
 struct DigestDataStream {
     data_stream: DataStream,
@@ -69,6 +68,22 @@ impl Read for DigestDataStream {
     }
 }
 
+pub fn login(repo: &rdedup::Repo, dao: &Dao, enc: &Encryptor, device_id: &str, repo_pass: &str) -> Result<String, Error> {
+    // TODO check existing record
+
+    // TODO check secret file in repo
+    // TODO return HTTP 401
+    repo.unlock_decrypt(&*Box::new(move || { Ok(String::from(repo_pass)) }))?;
+
+    dao.login(enc, device_id, repo_pass)
+        .map_err(Error::from)
+}
+
+pub fn authenticate(dao: &Dao, enc: &Encryptor, session_pass: &str) -> Result<Option<DeviceIdentity>, Error> {
+    dao.authenticate(enc, session_pass)
+        .map_err(Error::from)
+}
+
 pub fn save(repo: &Repo, dao: &Dao, uploaded_file: UploadedFile, data: Data) -> Result<(), Error> {
     let current_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)?;
@@ -90,13 +105,12 @@ pub fn save(repo: &Repo, dao: &Dao, uploaded_file: UploadedFile, data: Data) -> 
     repo.repo
         .write(&file_name_final, stream, &encrypt_handle)
         .map_err(Error::from)
-        .and_then(|stats| {
+        .and_then(|_| {
             let res_size: u64 = Arc::try_unwrap(size).unwrap().into_inner().unwrap();
 
             let res_hash = Arc::try_unwrap(hasher).unwrap().into_inner().unwrap().result();
-            let hex_string = to_hex_string(&res_hash);
 
-            Ok((hex_string, res_size))
+            Ok((hex::encode(&res_hash), res_size))
         }).and_then(|(hash, size)| {
         let old_file = dao.find_file(&uploaded_file.device_id, &uploaded_file.name)?;
 
@@ -121,7 +135,7 @@ pub fn load(repo: &Repo, dao: &Dao, version_id: u32) -> Result<pipe::PipeReader,
 
     use std::thread::spawn;
 
-    let (mut reader, mut writer) = pipe::pipe();
+    let (reader, writer) = pipe::pipe();
     let mut writer = Box::from(writer);
 
     let boxed_repo = Box::from(repo.repo.clone());
@@ -149,27 +163,7 @@ fn to_storage_name(pc_id: &str, orig_file_name: &str, time_stamp: NaiveDateTime)
     hasher.input(&transform_u32_to_bytes(time_stamp.second()));
     hasher.input(&transform_u32_to_bytes(time_stamp.nanosecond()));
 
-    to_hex_string(&hasher.result())
-}
-
-fn to_hex_string(bytes: &[u8]) -> String {
-    bytes.iter()
-        .map(|b| format!("{:02X}", b))
-        .collect::<Vec<String>>()
-        .join("")
-}
-
-fn transform_u64_to_bytes(x: u64) -> [u8; 8] {
-    let b1: u8 = ((x >> 56) & 0xff) as u8;
-    let b2: u8 = ((x >> 48) & 0xff) as u8;
-    let b3: u8 = ((x >> 40) & 0xff) as u8;
-    let b4: u8 = ((x >> 32) & 0xff) as u8;
-    let b5: u8 = ((x >> 24) & 0xff) as u8;
-    let b6: u8 = ((x >> 16) & 0xff) as u8;
-    let b7: u8 = ((x >> 8) & 0xff) as u8;
-    let b8: u8 = (x & 0xff) as u8;
-
-    return [b1, b2, b3, b4, b5, b6, b7, b8]
+    hex::encode(&hasher.result())
 }
 
 fn transform_u32_to_bytes(x: u32) -> [u8; 4] {

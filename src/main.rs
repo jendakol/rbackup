@@ -30,6 +30,7 @@ use rdedup::{Repo as RdedupRepo};
 
 use rbackup::structs::*;
 use rbackup::dao::Dao;
+use rbackup::encryptor::Encryptor;
 
 #[derive(FromForm)]
 struct UploadMetadata {
@@ -41,77 +42,77 @@ struct DownloadMetadata {
     file_version_id: u32,
 }
 
-struct ClientIdentity {
+#[derive(FromForm)]
+struct LoginMetadata {
     device_id: String,
     repo_pass: String
 }
 
-impl<'a, 'r> FromRequest<'a, 'r> for ClientIdentity {
+pub struct Headers {
+    session_pass: String
+}
+
+impl<'a, 'r> FromRequest<'a, 'r> for Headers {
     type Error = ();
 
-    fn from_request(request: &'a Request<'r>) -> request::Outcome<ClientIdentity, ()> {
+    fn from_request(request: &'a Request<'r>) -> request::Outcome<Headers, ()> {
         // device id
 
-        let values: Vec<_> = request.headers().get("X-Device-Id").collect();
+        let values: Vec<_> = request.headers().get("RBackup-Session-Pass").collect();
         if values.len() != 1 {
             return Outcome::Failure((Status::BadRequest, ()));
         }
 
-        let device_id = String::from(values[0]);
+        let session_pass = String::from(values[0]);
 
-        // repo pass
-
-        let values: Vec<_> = request.headers().get("X-Repo-Pass").collect();
-        if values.len() != 1 {
-            return Outcome::Failure((Status::BadRequest, ()));
-        }
-
-        let repo_pass = String::from(values[0]);
-
-        return Outcome::Success(ClientIdentity {
-            device_id,
-            repo_pass
+        return Outcome::Success(Headers {
+            session_pass
         });
     }
 }
 
+#[get("/login?<metadata>")]
+fn login(config: State<AppConfig>, metadata: LoginMetadata) -> Result<String, Error> {
+    rbackup::login(&config.repo, &config.dao, &config.encryptor, &metadata.device_id, &metadata.repo_pass)
+}
+
 #[get("/list")]
-fn list(config: State<AppConfig>, client_identity: ClientIdentity) -> Result<String, Error> {
-    rbackup::list(&config.dao, &client_identity.device_id)
+fn list(config: State<AppConfig>, headers: Headers) -> Result<String, Error> {
+    let device = rbackup::authenticate(&config.dao, &config.encryptor, &headers.session_pass)?.expect("Could not find session");
+
+    rbackup::list(&config.dao, &device.id)
 }
 
 #[get("/download?<metadata>")]
-fn download(config: State<AppConfig>, client_identity: ClientIdentity, metadata: DownloadMetadata) -> Result<Stream<pipe::PipeReader>, Error> {
-    let repo = Repo::new(config.repo.clone(), client_identity.repo_pass);
+fn download(config: State<AppConfig>, headers: Headers, metadata: DownloadMetadata) -> Result<Stream<pipe::PipeReader>, Error> {
+    let device = rbackup::authenticate(&config.dao, &config.encryptor, &headers.session_pass)?.expect("Could not find session");
+
+    let repo = Repo::new(config.repo.clone(), device.repo_pass);
 
     rbackup::load(&repo, &config.dao, metadata.file_version_id)
         .map(Stream::from)
 }
 
 #[post("/upload?<metadata>", format = "application/octet-stream", data = "<data>")]
-fn upload(config: State<AppConfig>, client_identity: ClientIdentity, metadata: UploadMetadata, data: Data) -> String {
+fn upload(config: State<AppConfig>, headers: Headers, metadata: UploadMetadata, data: Data) -> Result<String, Error> {
+    let device = rbackup::authenticate(&config.dao, &config.encryptor, &headers.session_pass)?.expect("Could not find session");
+
     let uploaded_file_metadata = UploadedFile {
         name: String::from(metadata.file_name),
-        device_id: String::from(client_identity.device_id)
+        device_id: String::from(device.id)
     };
 
-    let repo = Repo::new(config.repo.clone(), client_identity.repo_pass);
+    let repo = Repo::new(config.repo.clone(), device.repo_pass);
 
-    match rbackup::save(&repo, &config.dao, uploaded_file_metadata, data) {
-        Ok(()) => {
-            String::from("ok")
-        }
-        Err(e) => {
-            warn!(config.logger, "{}", e);
-            format!("{}", e)
-        }
-    }
+    rbackup::save(&repo, &config.dao, uploaded_file_metadata, data)
+        .map(|_| { String::from("ok") })
 }
 
 
 struct AppConfig {
     repo: RdedupRepo,
     dao: Dao,
+    encryptor: Encryptor,
     logger: slog::Logger,
 }
 
@@ -145,13 +146,12 @@ fn main() {
                        &config.get_str("db_name").unwrap(),
     );
 
-//    println!("{:?}", dao.get_devices());
-//    println!("{:?}", dao.list_files("placka"));
+    let secret_iv = config.clone().get_str("secret").expect("There is no secret provided");
 
-
-    let config = AppConfig {
+    let app_config = AppConfig {
         repo,
         dao,
+        encryptor: Encryptor::new(secret_iv),
         logger,
     };
 
@@ -159,6 +159,7 @@ fn main() {
         .mount("/", routes![upload])
         .mount("/", routes![download])
         .mount("/", routes![list])
-        .manage(config)
+        .mount("/", routes![login])
+        .manage(app_config)
         .launch();
 }
