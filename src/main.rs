@@ -146,20 +146,30 @@ fn main() {
                        &config.get_str("db_name").unwrap(),
     );
 
-    let secret_iv = config.clone().get_str("secret").expect("There is no secret provided");
+    let secret = config.clone().get_str("secret").expect("There is no secret provided");
 
-    let app_config = AppConfig {
-        repo,
-        dao,
-        encryptor: Encryptor::new(secret_iv),
-        logger,
-    };
+    // configure server:
 
-    rocket::ignite()
+    let tls_config = config.get_table("tls").unwrap();
+
+    let mut c = rocket::Config::build(rocket::config::Environment::Development)
+        .address(config.get_str("address").expect("There is no bind address provided"))
+        .port(config.get_int("port").expect("There is no bind port provided") as u16)
+        .workers(config.get_int("workers").expect("There is no workers count provided") as u16)
+        .tls(tls_config.get("certs").expect("There is no TLS cert path provided").to_string(),
+             tls_config.get("key").expect("There is no TLS key path provided").to_string())
+        .unwrap();
+
+    rocket::custom(c, true)
         .mount("/", routes![upload])
         .mount("/", routes![download])
         .mount("/", routes![list])
         .mount("/", routes![login])
-        .manage(app_config)
+        .manage(AppConfig {
+            repo,
+            dao,
+            encryptor: Encryptor::new(secret.clone()),
+            logger,
+        })
         .launch();
 }
