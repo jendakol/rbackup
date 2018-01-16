@@ -82,7 +82,7 @@ fn login(config: State<AppConfig>, metadata: LoginMetadata) -> status::Custom<St
 
 #[get("/list")]
 fn list(config: State<AppConfig>, headers: Headers) -> status::Custom<String> {
-    authenticated(&config.dao, &config.encryptor, &headers.session_pass, |device| {
+    authenticated(&config.dao, &config.encryptor, &headers.session_pass)(|device| {
         match rbackup::list(&config.dao, &device.id) {
             Ok(list) => status_ok(list),
             Err(e) => status_internal_server_error(e)
@@ -102,7 +102,8 @@ fn download(config: State<AppConfig>, headers: Headers, metadata: DownloadMetada
 
 #[post("/upload?<metadata>", format = "application/octet-stream", data = "<data>")]
 fn upload(config: State<AppConfig>, headers: Headers, metadata: UploadMetadata, data: Data) -> Result<String, Error> {
-//    authenticated(&config.dao, &config.encryptor, &headers.session_pass, |device| {
+//fn upload(config: State<AppConfig>, headers: Headers, metadata: UploadMetadata, data: Data) -> status::Custom<String> {
+//    authenticated(&config.dao, &config.encryptor, &headers.session_pass)(|device| {
 //        let uploaded_file_metadata = UploadedFile {
 //            name: String::from(metadata.file_name.clone()),
 //            device_id: String::from(device.id)
@@ -129,11 +130,11 @@ fn upload(config: State<AppConfig>, headers: Headers, metadata: UploadMetadata, 
         .map(|_| { String::from("ok") })
 }
 
-fn authenticated<F: Fn(DeviceIdentity) -> status::Custom<String>>(dao: &Dao, enc: &Encryptor, session_pass: &str, f: F) -> status::Custom<String> {
+fn authenticated<F2: Fn(DeviceIdentity) -> status::Custom<String>>(dao: &Dao, enc: &Encryptor, session_pass: &str) -> Box<Fn(F2) -> status::Custom<String>> {
     match rbackup::authenticate(dao, enc, session_pass) {
-        Ok(Some(identity)) => f(identity),
-        Ok(None) => status::Custom(Status::Unauthorized, "Cannot find session".to_string()),
-        Err(e) => status::Custom(Status::InternalServerError, format!("{}", e))
+        Ok(Some(identity)) => Box::new(move |f2: F2| { f2(identity.clone()) }),
+        Ok(None) => Box::new(|_: F2| { status::Custom(Status::Unauthorized, "Cannot find session".to_string()) }),
+        Err(e) => Box::new(move |_: F2| { status::Custom(Status::InternalServerError, format!("{}", e)) })
     }
 }
 
@@ -144,6 +145,7 @@ fn status_internal_server_error(e: Error) -> status::Custom<String> {
 fn status_ok(s: String) -> status::Custom<String> {
     status::Custom(Status::Ok, s)
 }
+
 struct AppConfig {
     repo: RdedupRepo,
     dao: Dao,

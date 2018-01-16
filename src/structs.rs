@@ -20,6 +20,7 @@ pub struct UploadedFile {
     pub device_id: String,
 }
 
+#[derive(Debug, Clone)]
 pub struct DeviceIdentity {
     pub id: String,
     pub repo_pass: String
