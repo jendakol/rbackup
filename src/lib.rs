@@ -1,42 +1,42 @@
-extern crate failure;
+#[macro_use]
+extern crate arrayref;
+extern crate chrono;
+extern crate crypto;
 extern crate env_logger;
+extern crate failure;
+extern crate hex;
 #[macro_use]
 extern crate log;
-extern crate time;
-extern crate chrono;
+extern crate multimap;
+#[macro_use]
+extern crate mysql;
+extern crate pipe;
+extern crate rdedup_lib as rdedup;
+extern crate rocket;
 #[macro_use]
 extern crate serde_derive;
 extern crate serde_json;
-extern crate multimap;
-extern crate rocket;
-extern crate rdedup_lib as rdedup;
-extern crate pipe;
-#[macro_use]
-extern crate mysql;
 extern crate sha2;
-extern crate crypto;
-#[macro_use]
-extern crate arrayref;
+extern crate time;
 extern crate uuid;
-extern crate hex;
+
+use chrono::prelude::*;
+use dao::Dao;
+use encryptor::Encryptor;
+use failure::Error;
+use rocket::data::Data;
+use rocket::data::DataStream;
+use sha2::{Digest, Sha256};
+use std::io::Read;
+use std::str;
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
+use structs::*;
 
 pub mod dao;
 mod failures;
 pub mod encryptor;
 pub mod structs;
-
-use failure::Error;
-use std::time::{SystemTime, UNIX_EPOCH};
-use chrono::prelude::*;
-use std::str;
-use rocket::data::Data;
-use rocket::data::DataStream;
-use std::io::{Read};
-use sha2::{Sha256, Digest};
-use std::sync::{Arc, Mutex};
-use dao::Dao;
-use structs::*;
-use encryptor::Encryptor;
 
 struct DigestDataStream {
     data_stream: DataStream,
@@ -78,6 +78,7 @@ pub fn login(repo: &rdedup::Repo, dao: &Dao, enc: &Encryptor, device_id: &str, r
             dao.login(enc, device_id, repo_pass)
                 .map_err(Error::from)
         })
+        .map(|session_id| { format!(r#"{{ "session_id": "{}" }}"#, session_id) })
 }
 
 pub fn authenticate(dao: &Dao, enc: &Encryptor, session_pass: &str) -> Result<Option<DeviceIdentity>, Error> {
@@ -85,7 +86,7 @@ pub fn authenticate(dao: &Dao, enc: &Encryptor, session_pass: &str) -> Result<Op
         .map_err(Error::from)
 }
 
-pub fn save(repo: &Repo, dao: &Dao, uploaded_file: UploadedFile, data: Data) -> Result<(), Error> {
+pub fn save(repo: &Repo, dao: &Dao, uploaded_file: UploadedFile, data: Data) -> Result<dao::File, Error> {
     let current_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)?;
 
@@ -118,15 +119,13 @@ pub fn save(repo: &Repo, dao: &Dao, uploaded_file: UploadedFile, data: Data) -> 
         // TODO check whether there is not already last version with the same hash
         let new_version = dao::FileVersion {
             version: 0, // cannot know now, will be filled in after DB insertion
-            size: size,
+            size,
             hash: hash.clone(),
             created: time_stamp,
             storage_name: file_name_final
         };
 
-        dao.save_new_version(&uploaded_file, old_file, new_version)?;
-
-        Ok(())
+        dao.save_new_version(&uploaded_file, old_file, new_version).map_err(Error::from)
     })
 }
 

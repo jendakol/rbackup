@@ -21,7 +21,7 @@ pub struct Device {
 
 #[derive(Debug, PartialEq, Eq, Hash, Serialize)]
 pub struct File {
-    pub id: u32,
+    pub id: u64,
     pub device_id: String,
     pub original_name: String,
     pub versions: Vec<FileVersion>
@@ -29,7 +29,7 @@ pub struct File {
 
 #[derive(Debug, PartialEq, Eq, Hash, Serialize, Clone)]
 pub struct FileVersion {
-    pub version: u32,
+    pub version: u64,
     pub size: u64,
     pub hash: String,
     pub created: NaiveDateTime,
@@ -52,7 +52,7 @@ impl Dao {
     pub fn save_new_version(&self, uploaded_file: &UploadedFile, old_file: Option<File>, new_file_version: FileVersion) -> mysql::error::Result<File> {
         match old_file {
             Some(file) => {
-                self.pool.prep_exec(
+                let r = self.pool.prep_exec(
                     format!("insert into {}.files_versions (file_id, created, size, hash, storage_name) values (:file_id, :created, :size, :hash, :storage_name)", self.db_name),
                     params! {"file_id" => file.id,
                                    "created" => &new_file_version.created,
@@ -61,8 +61,13 @@ impl Dao {
                                    "storage_name" => &new_file_version.storage_name
                                    })?;
 
+                let new_id = r.last_insert_id();
+
+                let mut new_file_version = new_file_version.clone();
+                new_file_version.version = new_id;
+
                 let mut versions = file.versions;
-                versions.push(new_file_version.clone());
+                versions.push(new_file_version);
 
                 Ok(File {
                     id: file.id,
@@ -84,7 +89,7 @@ impl Dao {
                 let file_id = insert_file_result.last_insert_id();
 
                 let file = File {
-                    id: file_id as u32,
+                    id: file_id,
                     device_id: uploaded_file.device_id.clone(),
                     original_name: uploaded_file.name.clone(),
                     versions: Vec::new()
@@ -117,7 +122,7 @@ impl Dao {
                             storage_name
                         }
                     )
-                }).collect::<multimap::MultiMap<(u32, String, String), FileVersion>>()
+                }).collect::<multimap::MultiMap<(u64, String, String), FileVersion>>()
                     .into_iter()
                     .next()
                     .map(|((id, device_id, original_name), versions)| {
@@ -164,7 +169,7 @@ impl Dao {
                         storage_name
                     }
                 )
-            }).collect::<multimap::MultiMap<(u32, String, String), FileVersion>>()
+            }).collect::<multimap::MultiMap<(u64, String, String), FileVersion>>()
                 .into_iter().map(|((id, device_id, original_name), versions)| {
                 File {
                     id,
