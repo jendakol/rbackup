@@ -155,6 +155,42 @@ pub fn list(dao: &Dao, device_id: &str) -> Result<String, Error> {
     Ok(serde_json::to_string(&res)?)
 }
 
+pub fn remove_file_version(repo: &Repo, dao: &Dao, version_id: u32) -> Result<(u16, String), Error> {
+    dao.remove_file_version(version_id)
+        .map(|opt| {
+            opt.map(|storage_name| {
+                match repo.repo.rm(&storage_name) {
+                    Ok(_) => (200 as u16, String::from("")),
+                    Err(e) => (500 as u16, format!("{}", e))
+                }
+            }).or(Some((404 as u16, String::from("File was not found")))).unwrap()
+        }).map_err(Error::from)
+}
+
+pub fn remove_file(repo: &Repo, dao: &Dao, file_name: &str) -> Result<(u16, String), Error> {
+    dao.remove_file(file_name)
+        .map(|opt_storage_names| {
+            match opt_storage_names {
+                Some(storage_names) => {
+                    let (_, failures): (Vec<_>, Vec<_>) = storage_names
+                        .into_iter()
+                        .map(|storage_name| {
+                            repo.repo.rm(&storage_name)
+                        }).partition(Result::is_ok);
+
+                    let failures: Vec<_> = failures.into_iter().map(Result::unwrap_err).collect();
+
+                    if failures.is_empty() {
+                        (200 as u16, String::from(""))
+                    } else {
+                        (500 as u16, format!("{:?}", failures))
+                    }
+                }
+                None => (500 as u16, String::from("Error while deleting"))
+            }
+        }).map_err(Error::from)
+}
+
 fn to_storage_name(pc_id: &str, orig_file_name: &str, time_stamp: NaiveDateTime) -> String {
     let mut hasher = Sha256::default();
 

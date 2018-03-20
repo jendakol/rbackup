@@ -1,18 +1,17 @@
-extern crate mysql;
 extern crate chrono;
-extern crate time;
 extern crate multimap;
-extern crate serde_json;
+extern crate mysql;
 extern crate serde;
+extern crate serde_json;
+extern crate time;
 
-use structs::*;
-
-use failure::Error;
 use dao::mysql::chrono::prelude::*;
-use sha2::*;
 use encryptor::Encryptor;
-use uuid::Uuid;
+use failure::Error;
 use hex;
+use sha2::*;
+use structs::*;
+use uuid::Uuid;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Device {
@@ -151,6 +150,18 @@ impl Dao {
             })
     }
 
+    pub fn get_storage_names(&self, file_name: &str) -> mysql::error::Result<Vec<String>> {
+        self.pool.prep_exec(format!("select storage_name from {}.files_versions join {}.files on {}.files_versions.file_id={}.files.id where {}.files.original_name=:file_name", self.db_name, self.db_name, self.db_name, self.db_name, self.db_name),
+                            params! {"file_name" => file_name})
+            .map(|result| {
+                result.map(|r| r.unwrap())
+                    .map(|row| {
+                        mysql::from_row(row)
+                    })
+                    .collect::<Vec<String>>()
+            })
+    }
+
     pub fn list_files(&self, device_id: &str) -> mysql::error::Result<Vec<File>> {
         self.pool.prep_exec(
             format!("select files.id, device_id, original_name, files_versions.id, size, hash, created, storage_name from {}.files join {}.files_versions on {}.files_versions.file_id = {}.files.id where device_id=:device_id",
@@ -179,6 +190,32 @@ impl Dao {
                 }
             }).collect()
         })
+    }
+
+    pub fn remove_file_version(&self, version_id: u32) -> mysql::error::Result<Option<String>> {
+        self.get_storage_name(version_id)
+            .and_then(|st| {
+                self.pool.prep_exec(format!("delete from {}.files_versions where id=:version_id limit 1", self.db_name),
+                                    params! {"version_id" => version_id})
+                    .map(|result| {
+                        if result.affected_rows() > 0 {
+                            st
+                        } else { None }
+                    })
+            })
+    }
+
+    pub fn remove_file(&self, file_name: &str) -> mysql::error::Result<Option<Vec<String>>> {
+        self.get_storage_names(file_name)
+            .and_then(|st| {
+                self.pool.prep_exec(format!("delete {}.files_versions from {}.files_versions join {}.files on {}.files_versions.file_id={}.files.id where {}.files.original_name=:file_name", self.db_name, self.db_name, self.db_name, self.db_name, self.db_name, self.db_name),
+                                    params! {"file_name" => file_name})
+                    .map(|result| {
+                        if result.affected_rows() == st.len() as u64 {
+                            Some(st)
+                        } else { None }
+                    })
+            })
     }
 
     pub fn get_devices(&self) -> mysql::error::Result<Vec<Device>> {

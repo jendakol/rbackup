@@ -15,10 +15,6 @@ extern crate slog;
 extern crate slog_async;
 extern crate slog_term;
 
-use failure::Error;
-use rbackup::dao::Dao;
-use rbackup::encryptor::Encryptor;
-use rbackup::structs::*;
 use rdedup::Repo as RdedupRepo;
 use rocket::Data;
 use rocket::http::Status;
@@ -29,6 +25,10 @@ use rocket::response::Stream;
 use rocket::State;
 use std::io::{Error as IoError, ErrorKind};
 use std::path::Path;
+use failure::Error;
+use rbackup::dao::Dao;
+use rbackup::encryptor::Encryptor;
+use rbackup::structs::*;
 
 #[derive(FromForm)]
 struct UploadMetadata {
@@ -37,6 +37,16 @@ struct UploadMetadata {
 
 #[derive(FromForm)]
 struct DownloadMetadata {
+    file_version_id: u32,
+}
+
+#[derive(FromForm)]
+struct RemoveFileMetadata {
+    file_name: String,
+}
+
+#[derive(FromForm)]
+struct RemoveFileVersionMetadata {
     file_version_id: u32,
 }
 
@@ -117,6 +127,30 @@ fn upload(config: State<AppConfig>, headers: Headers, metadata: UploadMetadata, 
     })
 }
 
+#[get("/remove/file/version?<metadata>")]
+fn remove_file_version(config: State<AppConfig>, headers: Headers, metadata: RemoveFileVersionMetadata)-> status::Custom<String> {
+    with_authentication(&config.dao, &config.encryptor, &headers.session_pass, |device| {
+        let repo = Repo::new(config.repo.clone(), device.repo_pass);
+
+        match rbackup::remove_file_version(&repo, &config.dao, metadata.file_version_id) {
+            Ok((status, body)) => status::Custom(Status::raw(status), body),
+            Err(e) => status_internal_server_error(e)
+        }
+    })
+}
+
+#[get("/remove/file?<metadata>")]
+fn remove_file(config: State<AppConfig>, headers: Headers, metadata: RemoveFileMetadata)-> status::Custom<String> {
+    with_authentication(&config.dao, &config.encryptor, &headers.session_pass, |device| {
+        let repo = Repo::new(config.repo.clone(), device.repo_pass);
+
+        match rbackup::remove_file(&repo, &config.dao, &metadata.file_name) {
+            Ok((status, body)) => status::Custom(Status::raw(status), body),
+            Err(e) => status_internal_server_error(e)
+        }
+    })
+}
+
 fn with_authentication<F2: FnOnce(DeviceIdentity) -> status::Custom<String>>(dao: &Dao, enc: &Encryptor, session_pass: &str, f2: F2) -> status::Custom<String> {
     match rbackup::authenticate(dao, enc, session_pass) {
         Ok(Some(identity)) => f2(identity.clone()),
@@ -182,6 +216,8 @@ fn start_server() -> () {
         .mount("/", routes![upload])
         .mount("/", routes![download])
         .mount("/", routes![list])
+        .mount("/", routes![remove_file])
+        .mount("/", routes![remove_file_version])
         .mount("/", routes![login])
         .manage(AppConfig {
             repo,
