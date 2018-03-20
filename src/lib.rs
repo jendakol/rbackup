@@ -1,10 +1,12 @@
 #[macro_use]
 extern crate arrayref;
 extern crate chrono;
+extern crate config;
 extern crate crypto;
 extern crate env_logger;
 extern crate failure;
 extern crate hex;
+extern crate itertools;
 #[macro_use]
 extern crate log;
 extern crate multimap;
@@ -189,6 +191,24 @@ pub fn remove_file(repo: &Repo, dao: &Dao, file_name: &str) -> Result<(u16, Stri
                 None => (500 as u16, String::from("Error while deleting"))
             }
         }).map_err(Error::from)
+}
+
+pub fn maintenance(max_version_age_days: u64, dao: Arc<Dao>) -> () {
+    println!("Running maintenance (max file age: {} days)", max_version_age_days);
+
+    let current_time = SystemTime::now()
+        .duration_since(UNIX_EPOCH).unwrap();
+
+    let time_threshold = NaiveDateTime::from_timestamp(
+        (current_time.as_secs() - (max_version_age_days * 86400)) as i64,
+        current_time.subsec_nanos()
+    );
+
+    let too_old_versions = dao.find_old_files(&time_threshold).unwrap();
+
+    println!("{:?}", too_old_versions)
+
+    // TODO
 }
 
 fn to_storage_name(pc_id: &str, orig_file_name: &str, time_stamp: NaiveDateTime) -> String {

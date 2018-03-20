@@ -9,6 +9,7 @@ use dao::mysql::chrono::prelude::*;
 use encryptor::Encryptor;
 use failure::Error;
 use hex;
+use itertools::Itertools;
 use sha2::*;
 use structs::*;
 use uuid::Uuid;
@@ -269,5 +270,31 @@ impl Dao {
         self.pool.prep_exec(format!("insert into {}.sessions (id, device_id, pass) values(:id, :device_id, :pass )", self.db_name), params!("id" => hashed_pass, "device_id" => device_id, "pass" => repo_pass ))
             .map(|_| { pass })
             .map_err(Error::from)
+    }
+
+    pub fn find_old_files(&self, time_threshold: &NaiveDateTime) -> mysql::error::Result<Vec<String>> {
+        self.pool.prep_exec(format!("select {}.files.id, created, storage_name from {}.files join {}.files_versions on {}.files_versions.file_id=files.id order by created desc", self.db_name, self.db_name, self.db_name, self.db_name), ())
+            .map(|result| {
+                result.map(|x| x.unwrap())
+                    .map(|row| {
+                        let (file_id, created, storage_name) = mysql::from_row(row);
+
+                        (file_id, (created, storage_name))
+                    }).collect::<multimap::MultiMap<u64, (NaiveDateTime, String)>>()
+                    .into_iter()
+                    .map(|(_, names)| {
+                        names
+                            .into_iter()
+                            .skip(1) // keep always the most recent version!
+                            .filter(|&(ref created, ref storage_name)| {
+                                // println!("Created: {:?}\tLimit: {:?}\tLT: {}",created, time_threshold, created.lt(time_threshold));
+                                created.lt(time_threshold)
+                            })
+                            .map(|(created, storage_name)| { storage_name }) // keep just the name
+                            .collect_vec()
+                    })
+                    .flatten()
+                    .collect_vec()
+            })
     }
 }

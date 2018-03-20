@@ -3,6 +3,7 @@
 
 extern crate config;
 extern crate failure;
+extern crate job_scheduler;
 extern crate mysql;
 extern crate pipe;
 extern crate rbackup;
@@ -15,6 +16,11 @@ extern crate slog;
 extern crate slog_async;
 extern crate slog_term;
 
+use failure::Error;
+use job_scheduler::{Job, JobScheduler};
+use rbackup::dao::Dao;
+use rbackup::encryptor::Encryptor;
+use rbackup::structs::*;
 use rdedup::Repo as RdedupRepo;
 use rocket::Data;
 use rocket::http::Status;
@@ -25,10 +31,8 @@ use rocket::response::Stream;
 use rocket::State;
 use std::io::{Error as IoError, ErrorKind};
 use std::path::Path;
-use failure::Error;
-use rbackup::dao::Dao;
-use rbackup::encryptor::Encryptor;
-use rbackup::structs::*;
+use std::sync::Arc;
+use std::time::Duration;
 
 #[derive(FromForm)]
 struct UploadMetadata {
@@ -128,7 +132,7 @@ fn upload(config: State<AppConfig>, headers: Headers, metadata: UploadMetadata, 
 }
 
 #[get("/remove/file/version?<metadata>")]
-fn remove_file_version(config: State<AppConfig>, headers: Headers, metadata: RemoveFileVersionMetadata)-> status::Custom<String> {
+fn remove_file_version(config: State<AppConfig>, headers: Headers, metadata: RemoveFileVersionMetadata) -> status::Custom<String> {
     with_authentication(&config.dao, &config.encryptor, &headers.session_pass, |device| {
         let repo = Repo::new(config.repo.clone(), device.repo_pass);
 
@@ -140,7 +144,7 @@ fn remove_file_version(config: State<AppConfig>, headers: Headers, metadata: Rem
 }
 
 #[get("/remove/file?<metadata>")]
-fn remove_file(config: State<AppConfig>, headers: Headers, metadata: RemoveFileMetadata)-> status::Custom<String> {
+fn remove_file(config: State<AppConfig>, headers: Headers, metadata: RemoveFileMetadata) -> status::Custom<String> {
     with_authentication(&config.dao, &config.encryptor, &headers.session_pass, |device| {
         let repo = Repo::new(config.repo.clone(), device.repo_pass);
 
@@ -169,9 +173,28 @@ fn status_ok(s: String) -> status::Custom<String> {
 
 struct AppConfig {
     repo: RdedupRepo,
-    dao: Dao,
+    dao: Arc<Dao>,
     encryptor: Encryptor,
     logger: slog::Logger,
+}
+
+fn plan_maintenance(config: config::Config, dao: Arc<Dao>) -> () {
+    std::thread::spawn(move || {
+        let mut sched = JobScheduler::new();
+
+        let config_str = config.get_str("maintenance_cron").expect("Missing configuration of maintenance: cron");
+
+        let max_version_age = config.get_int("maintenance_max_version_age_days").expect("Missing configuration of maintenance: max_version_age_days") as u64;
+
+        sched.add(Job::new(config_str.parse().unwrap(), move || {
+            rbackup::maintenance(max_version_age, dao.clone())
+        }));
+
+        loop {
+            sched.tick();
+            std::thread::sleep(Duration::from_millis(500));
+        }
+    });
 }
 
 fn start_server() -> () {
@@ -190,15 +213,19 @@ fn start_server() -> () {
 
     // create DAO
 
-    let dao = Dao::new(&format!("mysql://{}:{}@{}:{}",
-                                config.get_str("db_user").unwrap(),
-                                config.get_str("db_pass").unwrap(),
-                                config.get_str("db_host").unwrap(),
-                                config.get_str("db_port").unwrap()),
-                       &config.get_str("db_name").unwrap(),
-    );
+    let dao = Arc::new(Dao::new(&format!("mysql://{}:{}@{}:{}",
+                                         config.get_str("db_user").unwrap(),
+                                         config.get_str("db_pass").unwrap(),
+                                         config.get_str("db_host").unwrap(),
+                                         config.get_str("db_port").unwrap()),
+                                &config.get_str("db_name").unwrap(),
+    ));
 
     let secret = config.clone().get_str("secret").expect("There is no secret provided");
+
+    // plan maintenance job
+
+    plan_maintenance(config.clone(), dao.clone());
 
     // configure server:
 
@@ -221,7 +248,7 @@ fn start_server() -> () {
         .mount("/", routes![login])
         .manage(AppConfig {
             repo,
-            dao,
+            dao: dao.clone(),
             encryptor: Encryptor::new(secret.clone()),
             logger,
         })

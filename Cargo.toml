@@ -31,3 +31,5 @@ uuid = { version = "0.4", features = ["serde", "v4"] }
 rust-crypto = "^0.2"
 arrayref = "0.3.4"
 hex = "~0.3"
+job_scheduler = "1.0.4"
+itertools = "0.7.6"
