@@ -138,8 +138,8 @@ impl Dao {
         })
     }
 
-    pub fn get_storage_name(&self, version_id: u32) -> mysql::error::Result<Option<String>> {
-        self.pool.prep_exec(format!("select storage_name from {}.files_versions where id=:version_id", self.db_name),
+    pub fn get_hash_and_storage_name(&self, version_id: u32) -> mysql::error::Result<Option<(String, String)>> {
+        self.pool.prep_exec(format!("select hash, storage_name from {}.files_versions where id=:version_id", self.db_name),
                             params! {"version_id" => version_id})
             .map(|result| {
                 result.map(|r| r.unwrap())
@@ -193,13 +193,13 @@ impl Dao {
     }
 
     pub fn remove_file_version(&self, version_id: u32) -> mysql::error::Result<Option<String>> {
-        self.get_storage_name(version_id)
+        self.get_hash_and_storage_name(version_id)
             .and_then(|st| {
                 self.pool.prep_exec(format!("delete from {}.files_versions where id=:version_id limit 1", self.db_name),
                                     params! {"version_id" => version_id})
                     .map(|result| {
                         if result.affected_rows() > 0 {
-                            st
+                            st.map(|o| o.1)
                         } else { None }
                     })
             })

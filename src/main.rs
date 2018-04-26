@@ -14,7 +14,6 @@ extern crate serde_json;
 extern crate slog;
 extern crate slog_async;
 extern crate slog_term;
-extern crate stringreader;
 
 use failure::Error;
 use rbackup::dao::Dao;
@@ -25,8 +24,7 @@ use rocket::Data;
 use rocket::http::Status;
 use rocket::Outcome;
 use rocket::request::{self, FromRequest, Request};
-use rocket::response::status;
-use rocket::response::Stream;
+use rocket::response::{Response, status};
 use rocket::State;
 use slog::{Drain, Level, Logger};
 use slog_async::Async;
@@ -102,27 +100,45 @@ fn list(config: State<AppConfig>, headers: Headers) -> status::Custom<String> {
 }
 
 #[get("/download?<metadata>")]
-fn download(config: State<AppConfig>, headers: Headers, metadata: DownloadMetadata) -> status::Custom<Stream<Box<std::io::Read>>> {
-    use std::io::BufReader;
-    use stringreader::StringReader;
-
+fn download(config: State<AppConfig>, headers: Headers, metadata: DownloadMetadata) -> Result<Response, Error> {
     match rbackup::authenticate(&config.dao, &config.encryptor, &headers.session_pass) {
         Ok(Some(device)) => {
             debug!(config.logger, "Opening repo");
 
             let repo = Repo::new(config.repo.clone(), device.repo_pass);
 
-            let status = rbackup::load(config.logger.clone(), &repo, &config.dao, metadata.file_version_id);
-
-            status::Custom(status.0, Stream::from(status.1))
+            rbackup::load(config.logger.clone(), &repo, &config.dao, metadata.file_version_id)
+                .and_then(|o| {
+                    match o {
+                        Some((hash, read)) => {
+                            rocket::response::Response::build()
+                                .raw_header("File-Hash", hash)
+                                .streamed_body(read)
+                                .ok()
+                        },
+                        None => {
+                            rocket::response::Response::build()
+                                .status(Status::NotFound)
+                                .ok()
+                        }
+                    }
+                })
         },
         Ok(None) => {
             debug!(config.logger, "Unauthenticated request! SessionId: {}", &headers.session_pass);
-            status::Custom(Status::Unauthorized, Stream::from(Box::from(BufReader::new(StringReader::new("Cannot find session"))) as Box<std::io::Read>))
+
+            rocket::response::Response::build()
+                .status(Status::Unauthorized)
+                .sized_body(std::io::Cursor::new("Cannot find session"))
+                .ok()
         },
         Err(e) => {
             info!(config.logger, "Error while authenticating: {}", e);
-            status::Custom(Status::InternalServerError, Stream::from(Box::from(BufReader::new(StringReader::new(""))) as Box<std::io::Read>))
+
+            rocket::response::Response::build()
+                .status(Status::InternalServerError)
+                .sized_body(std::io::Cursor::new(format!("{:?}", e)))
+                .ok()
         }
     }
 }

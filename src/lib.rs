@@ -17,7 +17,6 @@ extern crate serde_json;
 extern crate sha2;
 #[macro_use]
 extern crate slog;
-extern crate stringreader;
 extern crate time;
 extern crate uuid;
 
@@ -27,8 +26,6 @@ use encryptor::Encryptor;
 use failure::Error;
 use rocket::data::Data;
 use rocket::data::DataStream;
-use rocket::http::Status;
-use rocket::response::status;
 use sha2::{Digest, Sha256};
 use slog::Logger;
 use std::io::Read;
@@ -132,36 +129,29 @@ pub fn save(logger: &Logger, repo: &Repo, dao: &Dao, uploaded_file: UploadedFile
     })
 }
 
-pub fn load(logger: Logger, repo: &Repo, dao: &Dao, version_id: u32) -> status::Custom<Box<Read>> {
-    use std::io::BufReader;
-    use stringreader::StringReader;
+pub fn load(logger: Logger, repo: &Repo, dao: &Dao, version_id: u32) -> Result<Option<(String, Box<Read>)>, Error> {
+    dao.get_hash_and_storage_name(version_id)
+        .map(|n| {
+            n.map(|(hash, storage_name)| {
+                use std::thread::spawn;
 
-    match dao.get_storage_name(version_id) {
-        Ok(Some(storage_name)) => {
-            use std::thread::spawn;
+                let (reader, writer) = pipe::pipe();
+                let mut writer = Box::from(writer);
 
-            let (reader, writer) = pipe::pipe();
-            let mut writer = Box::from(writer);
+                let boxed_repo = Box::from(repo.repo.clone());
+                let decrypt_handle = repo.repo.unlock_decrypt(&*repo.pass).unwrap();
 
-            let boxed_repo = Box::from(repo.repo.clone());
-            let decrypt_handle = repo.repo.unlock_decrypt(&*repo.pass).unwrap();
+                spawn(move || {
+                    match boxed_repo.read(&storage_name, &mut writer, &decrypt_handle) {
+                        Ok(_) => (), // ok
+                        Err(err) => warn!(logger, "Error while reading the file: {}", err)
+                    }
+                    ()
+                });
 
-            spawn(move || {
-                match boxed_repo.read(&storage_name, &mut writer, &decrypt_handle) {
-                    Ok(_) => (), // ok
-                    Err(err) => warn!(logger, "Error while reading the file: {}", err)
-                }
-                ()
-            });
-
-            status::Custom(Status::Ok, Box::from(reader))
-        },
-        Ok(None) => status::Custom(Status::NotFound, Box::from(BufReader::new(StringReader::new("File was not found")))),
-        Err(err) => {
-            warn!(logger, "Error while loading the file: {}", err);
-            status::Custom(Status::InternalServerError, Box::from(BufReader::new(StringReader::new(""))))
-        }
-    }
+                (hash, Box::from(reader) as Box<Read>)
+            })
+        }).map_err(Error::from)
 }
 
 pub fn list(dao: &Dao, device_id: &str) -> Result<String, Error> {
