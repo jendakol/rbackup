@@ -5,8 +5,6 @@ extern crate crypto;
 extern crate env_logger;
 extern crate failure;
 extern crate hex;
-#[macro_use]
-extern crate log;
 extern crate multimap;
 #[macro_use]
 extern crate mysql;
@@ -17,6 +15,9 @@ extern crate rocket;
 extern crate serde_derive;
 extern crate serde_json;
 extern crate sha2;
+#[macro_use]
+extern crate slog;
+extern crate stringreader;
 extern crate time;
 extern crate uuid;
 
@@ -26,7 +27,10 @@ use encryptor::Encryptor;
 use failure::Error;
 use rocket::data::Data;
 use rocket::data::DataStream;
+use rocket::http::Status;
+use rocket::response::status;
 use sha2::{Digest, Sha256};
+use slog::Logger;
 use std::io::Read;
 use std::str;
 use std::sync::{Arc, Mutex};
@@ -34,7 +38,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use structs::*;
 
 pub mod dao;
-mod failures;
 pub mod encryptor;
 pub mod structs;
 
@@ -86,17 +89,17 @@ pub fn authenticate(dao: &Dao, enc: &Encryptor, session_pass: &str) -> Result<Op
         .map_err(Error::from)
 }
 
-pub fn save(repo: &Repo, dao: &Dao, uploaded_file: UploadedFile, data: Data) -> Result<dao::File, Error> {
+pub fn save(logger: &Logger, repo: &Repo, dao: &Dao, uploaded_file: UploadedFile, data: Data) -> Result<dao::File, Error> {
     let current_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)?;
 
     let time_stamp = NaiveDateTime::from_timestamp(current_time.as_secs() as i64, current_time.subsec_nanos());
 
-    debug!("Current time: {}", time_stamp);
+    debug!(logger, "Current time: {}", time_stamp);
 
     let file_name_final = to_storage_name(&uploaded_file.device_id, &uploaded_file.name, time_stamp);
 
-    debug!("Final name: {}", file_name_final);
+    debug!(logger, "Final name: {}", file_name_final);
 
     let encrypt_handle = repo.repo.unlock_encrypt(&*repo.pass)?;
 
@@ -129,25 +132,36 @@ pub fn save(repo: &Repo, dao: &Dao, uploaded_file: UploadedFile, data: Data) -> 
     })
 }
 
-pub fn load(repo: &Repo, dao: &Dao, version_id: u32) -> Result<pipe::PipeReader, Error> {
-    // TODO return 404 if not found
-    let storage_name = dao.get_storage_name(version_id)?.unwrap();
+pub fn load(logger: Logger, repo: &Repo, dao: &Dao, version_id: u32) -> status::Custom<Box<Read>> {
+    use std::io::BufReader;
+    use stringreader::StringReader;
 
-    use std::thread::spawn;
+    match dao.get_storage_name(version_id) {
+        Ok(Some(storage_name)) => {
+            use std::thread::spawn;
 
-    let (reader, writer) = pipe::pipe();
-    let mut writer = Box::from(writer);
+            let (reader, writer) = pipe::pipe();
+            let mut writer = Box::from(writer);
 
-    let boxed_repo = Box::from(repo.repo.clone());
-    let decrypt_handle = repo.repo.unlock_decrypt(&*repo.pass)?;
+            let boxed_repo = Box::from(repo.repo.clone());
+            let decrypt_handle = repo.repo.unlock_decrypt(&*repo.pass).unwrap();
 
-    spawn(move || {
-        boxed_repo.read(&storage_name, &mut writer, &decrypt_handle);
-        // TODO handle error
-        ()
-    });
+            spawn(move || {
+                match boxed_repo.read(&storage_name, &mut writer, &decrypt_handle) {
+                    Ok(_) => (), // ok
+                    Err(err) => warn!(logger, "Error while reading the file: {}", err)
+                }
+                ()
+            });
 
-    Ok(reader)
+            status::Custom(Status::Ok, Box::from(reader))
+        },
+        Ok(None) => status::Custom(Status::NotFound, Box::from(BufReader::new(StringReader::new("File was not found")))),
+        Err(err) => {
+            warn!(logger, "Error while loading the file: {}", err);
+            status::Custom(Status::InternalServerError, Box::from(BufReader::new(StringReader::new(""))))
+        }
+    }
 }
 
 pub fn list(dao: &Dao, device_id: &str) -> Result<String, Error> {

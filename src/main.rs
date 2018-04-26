@@ -14,7 +14,12 @@ extern crate serde_json;
 extern crate slog;
 extern crate slog_async;
 extern crate slog_term;
+extern crate stringreader;
 
+use failure::Error;
+use rbackup::dao::Dao;
+use rbackup::encryptor::Encryptor;
+use rbackup::structs::*;
 use rdedup::Repo as RdedupRepo;
 use rocket::Data;
 use rocket::http::Status;
@@ -23,12 +28,11 @@ use rocket::request::{self, FromRequest, Request};
 use rocket::response::status;
 use rocket::response::Stream;
 use rocket::State;
+use slog::{Drain, Level, Logger};
+use slog_async::Async;
+use slog_term::{CompactFormat, TermDecorator};
 use std::io::{Error as IoError, ErrorKind};
 use std::path::Path;
-use failure::Error;
-use rbackup::dao::Dao;
-use rbackup::encryptor::Encryptor;
-use rbackup::structs::*;
 
 #[derive(FromForm)]
 struct UploadMetadata {
@@ -89,7 +93,7 @@ fn login(config: State<AppConfig>, metadata: LoginMetadata) -> status::Custom<St
 
 #[get("/list")]
 fn list(config: State<AppConfig>, headers: Headers) -> status::Custom<String> {
-    with_authentication(&config.dao, &config.encryptor, &headers.session_pass, |device| {
+    with_authentication(&config.logger, &config.dao, &config.encryptor, &headers.session_pass, |device| {
         match rbackup::list(&config.dao, &device.id) {
             Ok(list) => status_ok(list),
             Err(e) => status_internal_server_error(e)
@@ -98,18 +102,34 @@ fn list(config: State<AppConfig>, headers: Headers) -> status::Custom<String> {
 }
 
 #[get("/download?<metadata>")]
-fn download(config: State<AppConfig>, headers: Headers, metadata: DownloadMetadata) -> Result<Stream<pipe::PipeReader>, Error> {
-    let device = rbackup::authenticate(&config.dao, &config.encryptor, &headers.session_pass)?.expect("Could not find session");
+fn download(config: State<AppConfig>, headers: Headers, metadata: DownloadMetadata) -> status::Custom<Stream<Box<std::io::Read>>> {
+    use std::io::BufReader;
+    use stringreader::StringReader;
 
-    let repo = Repo::new(config.repo.clone(), device.repo_pass);
+    match rbackup::authenticate(&config.dao, &config.encryptor, &headers.session_pass) {
+        Ok(Some(device)) => {
+            debug!(config.logger, "Opening repo");
 
-    rbackup::load(&repo, &config.dao, metadata.file_version_id)
-        .map(Stream::from)
+            let repo = Repo::new(config.repo.clone(), device.repo_pass);
+
+            let status = rbackup::load(config.logger.clone(), &repo, &config.dao, metadata.file_version_id);
+
+            status::Custom(status.0, Stream::from(status.1))
+        },
+        Ok(None) => {
+            debug!(config.logger, "Unauthenticated request! SessionId: {}", &headers.session_pass);
+            status::Custom(Status::Unauthorized, Stream::from(Box::from(BufReader::new(StringReader::new("Cannot find session"))) as Box<std::io::Read>))
+        },
+        Err(e) => {
+            info!(config.logger, "Error while authenticating: {}", e);
+            status::Custom(Status::InternalServerError, Stream::from(Box::from(BufReader::new(StringReader::new(""))) as Box<std::io::Read>))
+        }
+    }
 }
 
 #[post("/upload?<metadata>", format = "application/octet-stream", data = "<data>")]
 fn upload(config: State<AppConfig>, headers: Headers, metadata: UploadMetadata, data: Data) -> status::Custom<String> {
-    with_authentication(&config.dao, &config.encryptor, &headers.session_pass, |device| {
+    with_authentication(&config.logger, &config.dao, &config.encryptor, &headers.session_pass, |device| {
         let uploaded_file_metadata = UploadedFile {
             name: String::from(metadata.file_name.clone()),
             device_id: String::from(device.id)
@@ -117,7 +137,7 @@ fn upload(config: State<AppConfig>, headers: Headers, metadata: UploadMetadata, 
 
         let repo = Repo::new(config.repo.clone(), device.repo_pass);
 
-        let result = rbackup::save(&repo, &config.dao, uploaded_file_metadata, data)
+        let result = rbackup::save(&config.logger, &repo, &config.dao, uploaded_file_metadata, data)
             .and_then(|f| { serde_json::to_string(&f).map_err(Error::from) });
 
         match result {
@@ -128,8 +148,8 @@ fn upload(config: State<AppConfig>, headers: Headers, metadata: UploadMetadata, 
 }
 
 #[get("/remove/file/version?<metadata>")]
-fn remove_file_version(config: State<AppConfig>, headers: Headers, metadata: RemoveFileVersionMetadata)-> status::Custom<String> {
-    with_authentication(&config.dao, &config.encryptor, &headers.session_pass, |device| {
+fn remove_file_version(config: State<AppConfig>, headers: Headers, metadata: RemoveFileVersionMetadata) -> status::Custom<String> {
+    with_authentication(&config.logger, &config.dao, &config.encryptor, &headers.session_pass, |device| {
         let repo = Repo::new(config.repo.clone(), device.repo_pass);
 
         match rbackup::remove_file_version(&repo, &config.dao, metadata.file_version_id) {
@@ -140,8 +160,8 @@ fn remove_file_version(config: State<AppConfig>, headers: Headers, metadata: Rem
 }
 
 #[get("/remove/file?<metadata>")]
-fn remove_file(config: State<AppConfig>, headers: Headers, metadata: RemoveFileMetadata)-> status::Custom<String> {
-    with_authentication(&config.dao, &config.encryptor, &headers.session_pass, |device| {
+fn remove_file(config: State<AppConfig>, headers: Headers, metadata: RemoveFileMetadata) -> status::Custom<String> {
+    with_authentication(&config.logger, &config.dao, &config.encryptor, &headers.session_pass, |device| {
         let repo = Repo::new(config.repo.clone(), device.repo_pass);
 
         match rbackup::remove_file(&repo, &config.dao, &metadata.file_name) {
@@ -151,11 +171,19 @@ fn remove_file(config: State<AppConfig>, headers: Headers, metadata: RemoveFileM
     })
 }
 
-fn with_authentication<F2: FnOnce(DeviceIdentity) -> status::Custom<String>>(dao: &Dao, enc: &Encryptor, session_pass: &str, f2: F2) -> status::Custom<String> {
+fn with_authentication<F2: FnOnce(DeviceIdentity) -> status::Custom<String>>(logger: &Logger, dao: &Dao, enc: &Encryptor, session_pass: &str, f2: F2) -> status::Custom<String> {
+    debug!(logger, "Authenticating request");
+
     match rbackup::authenticate(dao, enc, session_pass) {
         Ok(Some(identity)) => f2(identity.clone()),
-        Ok(None) => status::Custom(Status::Unauthorized, "Cannot find session".to_string()),
-        Err(e) => status::Custom(Status::InternalServerError, format!("{}", e))
+        Ok(None) => {
+            debug!(logger, "Unauthenticated request! SessionId: {}", session_pass);
+            status::Custom(Status::Unauthorized, "Cannot find session".to_string())
+        },
+        Err(e) => {
+            info!(logger, "Error while authenticating: {}", e);
+            status::Custom(Status::InternalServerError, format!("{}", e))
+        }
     }
 }
 
@@ -175,7 +203,23 @@ struct AppConfig {
 }
 
 fn start_server() -> () {
-    let logger = slog::Logger::root(slog::Discard, o!());
+    // This bit configures a logger
+    // The nice colored stderr logger
+    let decorator = TermDecorator::new().stderr().build();
+    let term = CompactFormat::new(decorator)
+        .use_local_timestamp()
+        .build()
+        .filter_level(Level::Debug);
+    // Run it in a separate thread, both for performance and because the terminal one isn't Sync
+    let async = Async::new(term.ignore_res())
+        // Especially in test builds, we have quite large bursts of messages, so have more space to
+        // store them.
+        .chan_size(2048)
+        .build();
+    let logger = Logger::root(async.ignore_res(),
+                              o!("app" => format!("{}/{}",
+                                                  env!("CARGO_PKG_NAME"),
+                                                  env!("CARGO_PKG_VERSION"))));
 
     let mut config = config::Config::default();
     config.merge(config::File::with_name("Settings")).unwrap();
@@ -202,6 +246,8 @@ fn start_server() -> () {
 
     // configure server:
 
+    info!(logger, "Configuring server");
+
 //    let tls_config = config.get_table("tls").unwrap();
 
     let rocket_config = rocket::Config::build(rocket::config::Environment::Development)
@@ -210,6 +256,7 @@ fn start_server() -> () {
         .workers(config.get_int("workers").expect("There is no workers count provided") as u16)
 //        .tls(tls_config.get("certs").expect("There is no TLS cert path provided").to_string(),
 //             tls_config.get("key").expect("There is no TLS key path provided").to_string())
+        .log_level(rocket::logger::LoggingLevel::Critical)
         .unwrap();
 
     rocket::custom(rocket_config, true)
