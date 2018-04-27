@@ -112,7 +112,7 @@ fn download(config: State<AppConfig>, headers: Headers, metadata: DownloadMetada
                     match o {
                         Some((hash, read)) => {
                             rocket::response::Response::build()
-                                .raw_header("File-Hash", hash)
+                                .raw_header("RBackup-File-Hash", hash)
                                 .streamed_body(read)
                                 .ok()
                         },
