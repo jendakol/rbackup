@@ -35,35 +35,80 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use structs::*;
 
 pub mod dao;
+mod failures;
 pub mod encryptor;
 pub mod structs;
 
 struct DigestDataStream {
     data_stream: DataStream,
     hasher: Arc<Mutex<Sha256>>,
-    size: Arc<Mutex<u64>>
+    size: Arc<Mutex<u64>>,
+    buff: Arc<Mutex<Vec<u8>>>,
+    hash_from_stream: Arc<Mutex<Vec<u8>>>
 }
 
 impl DigestDataStream {
-    pub fn new(stream: DataStream, hasher: Arc<Mutex<Sha256>>, size: Arc<Mutex<u64>>) -> DigestDataStream {
+    pub fn new(stream: DataStream, hasher: Arc<Mutex<Sha256>>, size: Arc<Mutex<u64>>, hash_from_stream: Arc<Mutex<Vec<u8>>>) -> DigestDataStream {
+        let buff = Arc::new(Mutex::new(Vec::new()));
+
         DigestDataStream {
             data_stream: stream,
             hasher,
-            size
+            size,
+            buff,
+            hash_from_stream
         }
     }
 }
 
 impl Read for DigestDataStream {
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize, std::io::Error> {
-        self.data_stream
-            .read(buf)
-            .map(|s| {
-                let mut h = self.hasher.lock().unwrap();
-                h.input(&buf[0..s]);
-                *self.size.lock().unwrap() += s as u64;
+    fn read(&mut self, target_buff: &mut [u8]) -> Result<usize, std::io::Error> {
+        let target_buff_length = target_buff.len();
 
-                s
+        let mut buff = self.buff.lock().unwrap();
+
+        let capacity = target_buff_length + 32 - buff.len();
+        let mut tmp_buff: Vec<u8> = Vec::with_capacity(capacity);
+        tmp_buff.resize(capacity, 0);
+
+        self.data_stream
+            .read(&mut tmp_buff)
+            .map(|copied| {
+                let mut hasher = self.hasher.lock().unwrap();
+
+                let buff_len = buff.len();
+
+                if copied == 0 {
+                    if buff_len == 0 { 0 } else {
+                        let curr_buff = buff.clone();
+
+                        let hash = &curr_buff[(buff_len - 32)..];
+                        let to_return = &curr_buff[0..(buff_len - 32)];
+
+                        *self.hash_from_stream.lock().unwrap() = hash.to_vec(); // we have final hash
+                        *buff = Vec::new();
+
+                        target_buff[0..to_return.len()].clone_from_slice(to_return);
+                        hasher.input(to_return);
+                        *self.size.lock().unwrap() += to_return.len() as u64;
+                        to_return.len()
+                    }
+                } else {
+                    let mut current = buff.clone();
+                    current.append(&mut tmp_buff.as_mut_slice()[0..copied].to_vec());
+
+                    *buff = current[(current.len() - 32)..].to_vec();
+
+                    // val toReturn = current.dropRight(hashSize).take(targetBufferLength) - no nned for the min
+                    let to_return = &current[0..(current.len() - 32)][0..std::cmp::min(target_buff_length, current.len() - 32)];
+
+                    target_buff[0..to_return.len()].clone_from_slice(to_return);
+
+                    hasher.input(to_return);
+                    *self.size.lock().unwrap() += to_return.len() as u64;
+
+                    to_return.len()
+                }
             })
     }
 }
@@ -101,8 +146,9 @@ pub fn save(logger: &Logger, repo: &Repo, dao: &Dao, uploaded_file: UploadedFile
     let encrypt_handle = repo.repo.unlock_encrypt(&*repo.pass)?;
 
     let hasher = Arc::new(Mutex::new(Sha256::default()));
+    let hash_from_stream = Arc::new(Mutex::new(Vec::new()));
     let size = Arc::new(Mutex::new(0u64));
-    let stream = DigestDataStream::new(data.open(), hasher.clone(), size.clone());
+    let stream = DigestDataStream::new(data.open(), hasher.clone(), size.clone(), hash_from_stream.clone());
 
     repo.repo
         .write(&file_name_final, stream, &encrypt_handle)
@@ -110,9 +156,17 @@ pub fn save(logger: &Logger, repo: &Repo, dao: &Dao, uploaded_file: UploadedFile
         .and_then(|_| {
             let res_size: u64 = Arc::try_unwrap(size).unwrap().into_inner().unwrap();
 
-            let res_hash = Arc::try_unwrap(hasher).unwrap().into_inner().unwrap().result();
+            let hash_calculated = Arc::try_unwrap(hasher).unwrap().into_inner().unwrap().result();
+            let hash_declared = Arc::try_unwrap(hash_from_stream).unwrap().into_inner().unwrap();
 
-            Ok((hex::encode(&res_hash), res_size))
+            debug!(logger, "Uploaded file with size {} B, name '{}', declared hash {}", res_size, &uploaded_file.name, hex::encode(&hash_declared));
+
+            if hash_calculated.to_vec() == hash_declared {
+                Ok((hex::encode(&hash_calculated), res_size))
+            } else {
+                warn!(logger, "Declared hash '{}' don't match calculated '{}'", hex::encode(&hash_declared), hex::encode(&hash_calculated));
+                Err(Error::from(failures::CustomError::new("Declared and real sha256 don't match")))
+            }
         }).and_then(|(hash, size)| {
         let old_file = dao.find_file(&uploaded_file.device_id, &uploaded_file.name)?;
 

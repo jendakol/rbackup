@@ -225,7 +225,7 @@ fn start_server() -> () {
     let term = CompactFormat::new(decorator)
         .use_local_timestamp()
         .build()
-        .filter_level(Level::Debug);
+        .filter_level(Level::Info);
     // Run it in a separate thread, both for performance and because the terminal one isn't Sync
     let async = Async::new(term.ignore_res())
         // Especially in test builds, we have quite large bursts of messages, so have more space to

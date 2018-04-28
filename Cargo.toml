@@ -31,3 +31,4 @@ uuid = { version = "0.4", features = ["serde", "v4"] }
 rust-crypto = "^0.2"
 arrayref = "0.3.4"
 hex = "~0.3"
+stringreader = "0.1.1"
