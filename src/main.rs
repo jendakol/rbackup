@@ -1,6 +1,7 @@
 #![feature(plugin, custom_derive)]
 #![plugin(rocket_codegen)]
 
+extern crate cadence;
 extern crate config;
 extern crate failure;
 extern crate mysql;
@@ -15,6 +16,8 @@ extern crate slog;
 extern crate slog_async;
 extern crate slog_term;
 
+use cadence::prelude::*;
+use cadence::StatsdClient;
 use failure::Error;
 use rbackup::dao::Dao;
 use rbackup::encryptor::Encryptor;
@@ -83,15 +86,32 @@ impl<'a, 'r> FromRequest<'a, 'r> for Headers {
 
 #[get("/login?<metadata>")]
 fn login(config: State<AppConfig>, metadata: LoginMetadata) -> status::Custom<String> {
+    #[allow(unused_must_use)] {
+        config.statsd_client.count("requests.login", 1);
+        config.statsd_client.count("requests.total", 1);
+    }
+
     match rbackup::login(&config.repo, &config.dao, &config.encryptor, &metadata.device_id, &metadata.repo_pass) {
-        Ok(pass) => status::Custom(Status::Ok, pass),
-        Err(_) => status::Custom(Status::Unauthorized, "Cannot authenticate".to_string()),
+        Ok(pass) => {
+            #[allow(unused_must_use)] {
+                config.statsd_client.count("login.ok", 1);
+            }
+            status::Custom(Status::Ok, pass)
+        },
+        Err(_) => {
+            #[allow(unused_must_use)] {
+                config.statsd_client.count("login.failed", 1);
+            }
+            status::Custom(Status::Unauthorized, "Cannot authenticate".to_string())
+        },
     }
 }
 
 #[get("/list")]
 fn list(config: State<AppConfig>, headers: Headers) -> status::Custom<String> {
-    with_authentication(&config.logger, &config.dao, &config.encryptor, &headers.session_pass, |device| {
+    #[allow(unused_must_use)] { config.statsd_client.count("requests.list", 1); }
+
+    with_authentication(&config.logger, &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
         match rbackup::list(&config.dao, &device.id) {
             Ok(list) => status_ok(list),
             Err(e) => status_internal_server_error(e)
@@ -101,8 +121,14 @@ fn list(config: State<AppConfig>, headers: Headers) -> status::Custom<String> {
 
 #[get("/download?<metadata>")]
 fn download(config: State<AppConfig>, headers: Headers, metadata: DownloadMetadata) -> Result<Response, Error> {
+    #[allow(unused_must_use)] {
+        config.statsd_client.count("requests.total", 1);
+        config.statsd_client.count("requests.download", 1);
+    }
+
     match rbackup::authenticate(&config.dao, &config.encryptor, &headers.session_pass) {
         Ok(Some(device)) => {
+            #[allow(unused_must_use)] { config.statsd_client.count("authentication.ok", 1); }
             debug!(config.logger, "Opening repo");
 
             let repo = Repo::new(config.repo.clone(), device.repo_pass);
@@ -125,6 +151,7 @@ fn download(config: State<AppConfig>, headers: Headers, metadata: DownloadMetada
                 })
         },
         Ok(None) => {
+            #[allow(unused_must_use)] { config.statsd_client.count("authentication.not_found", 1); }
             debug!(config.logger, "Unauthenticated request! SessionId: {}", &headers.session_pass);
 
             rocket::response::Response::build()
@@ -133,7 +160,8 @@ fn download(config: State<AppConfig>, headers: Headers, metadata: DownloadMetada
                 .ok()
         },
         Err(e) => {
-            info!(config.logger, "Error while authenticating: {}", e);
+            #[allow(unused_must_use)] { config.statsd_client.count("authentication.failure", 1); }
+            warn!(config.logger, "Error while authenticating: {}", e);
 
             rocket::response::Response::build()
                 .status(Status::InternalServerError)
@@ -145,7 +173,9 @@ fn download(config: State<AppConfig>, headers: Headers, metadata: DownloadMetada
 
 #[post("/upload?<metadata>", format = "application/octet-stream", data = "<data>")]
 fn upload(config: State<AppConfig>, headers: Headers, metadata: UploadMetadata, data: Data) -> status::Custom<String> {
-    with_authentication(&config.logger, &config.dao, &config.encryptor, &headers.session_pass, |device| {
+    #[allow(unused_must_use)] { config.statsd_client.count("requests.upload", 1); }
+
+    with_authentication(&config.logger, &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
         let uploaded_file_metadata = UploadedFile {
             name: String::from(metadata.file_name.clone()),
             device_id: String::from(device.id)
@@ -153,7 +183,7 @@ fn upload(config: State<AppConfig>, headers: Headers, metadata: UploadMetadata, 
 
         let repo = Repo::new(config.repo.clone(), device.repo_pass);
 
-        let result = rbackup::save(&config.logger, &repo, &config.dao, uploaded_file_metadata, data)
+        let result = rbackup::save(&config.logger, config.statsd_client.clone(), &repo, &config.dao, uploaded_file_metadata, data)
             .and_then(|f| { serde_json::to_string(&f).map_err(Error::from) });
 
         match result {
@@ -165,7 +195,9 @@ fn upload(config: State<AppConfig>, headers: Headers, metadata: UploadMetadata, 
 
 #[get("/remove/file/version?<metadata>")]
 fn remove_file_version(config: State<AppConfig>, headers: Headers, metadata: RemoveFileVersionMetadata) -> status::Custom<String> {
-    with_authentication(&config.logger, &config.dao, &config.encryptor, &headers.session_pass, |device| {
+    #[allow(unused_must_use)] { config.statsd_client.count("requests.remove_file_version", 1); }
+
+    with_authentication(&config.logger, &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
         let repo = Repo::new(config.repo.clone(), device.repo_pass);
 
         match rbackup::remove_file_version(&repo, &config.dao, metadata.file_version_id) {
@@ -177,7 +209,9 @@ fn remove_file_version(config: State<AppConfig>, headers: Headers, metadata: Rem
 
 #[get("/remove/file?<metadata>")]
 fn remove_file(config: State<AppConfig>, headers: Headers, metadata: RemoveFileMetadata) -> status::Custom<String> {
-    with_authentication(&config.logger, &config.dao, &config.encryptor, &headers.session_pass, |device| {
+    #[allow(unused_must_use)] { config.statsd_client.count("requests.remove_file", 1); }
+
+    with_authentication(&config.logger, &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
         let repo = Repo::new(config.repo.clone(), device.repo_pass);
 
         match rbackup::remove_file(&repo, &config.dao, &metadata.file_name) {
@@ -187,17 +221,24 @@ fn remove_file(config: State<AppConfig>, headers: Headers, metadata: RemoveFileM
     })
 }
 
-fn with_authentication<F2: FnOnce(DeviceIdentity) -> status::Custom<String>>(logger: &Logger, dao: &Dao, enc: &Encryptor, session_pass: &str, f2: F2) -> status::Custom<String> {
+fn with_authentication<F2: FnOnce(DeviceIdentity) -> status::Custom<String>>(logger: &Logger, statsd_client: &StatsdClient, dao: &Dao, enc: &Encryptor, session_pass: &str, f2: F2) -> status::Custom<String> {
     debug!(logger, "Authenticating request");
 
+    #[allow(unused_must_use)] { statsd_client.count("requests.total", 1); }
+
     match rbackup::authenticate(dao, enc, session_pass) {
-        Ok(Some(identity)) => f2(identity.clone()),
+        Ok(Some(identity)) => {
+            #[allow(unused_must_use)] { statsd_client.count("authentication.ok", 1); }
+            f2(identity.clone())
+        },
         Ok(None) => {
+            #[allow(unused_must_use)] { statsd_client.count("authentication.not_found", 1); }
             debug!(logger, "Unauthenticated request! SessionId: {}", session_pass);
             status::Custom(Status::Unauthorized, "Cannot find session".to_string())
         },
         Err(e) => {
-            info!(logger, "Error while authenticating: {}", e);
+            #[allow(unused_must_use)] { statsd_client.count("authentication.failure", 1); }
+            warn!(logger, "Error while authenticating: {}", e);
             status::Custom(Status::InternalServerError, format!("{}", e))
         }
     }
@@ -216,29 +257,10 @@ struct AppConfig {
     dao: Dao,
     encryptor: Encryptor,
     logger: slog::Logger,
+    statsd_client: StatsdClient
 }
 
-fn start_server() -> () {
-    // This bit configures a logger
-    // The nice colored stderr logger
-    let decorator = TermDecorator::new().stderr().build();
-    let term = CompactFormat::new(decorator)
-        .use_local_timestamp()
-        .build()
-        .filter_level(Level::Info);
-    // Run it in a separate thread, both for performance and because the terminal one isn't Sync
-    let async = Async::new(term.ignore_res())
-        // Especially in test builds, we have quite large bursts of messages, so have more space to
-        // store them.
-        .chan_size(2048)
-        .build();
-    let logger = Logger::root(async.ignore_res(),
-                              o!("app" => format!("{}/{}",
-                                                  env!("CARGO_PKG_NAME"),
-                                                  env!("CARGO_PKG_VERSION"))));
-
-    let mut config = config::Config::default();
-    config.merge(config::File::with_name("Settings")).unwrap();
+fn start_server(logger: Logger, config: config::Config, statsd_client: StatsdClient) -> () {
 
     // open Repo
 
@@ -256,6 +278,7 @@ fn start_server() -> () {
                                 config.get_str("db_host").unwrap(),
                                 config.get_str("db_port").unwrap()),
                        &config.get_str("db_name").unwrap(),
+                       statsd_client.clone()
     );
 
     let secret = config.clone().get_str("secret").expect("There is no secret provided");
@@ -287,17 +310,64 @@ fn start_server() -> () {
             dao,
             encryptor: Encryptor::new(secret.clone()),
             logger,
+            statsd_client
         })
         .launch();
 }
 
 fn main() {
+    // This bit configures a logger
+    // The nice colored stderr logger
+    let decorator = TermDecorator::new().stderr().build();
+    let term = CompactFormat::new(decorator)
+        .use_local_timestamp()
+        .build()
+        .filter_level(Level::Info);
+    // Run it in a separate thread, both for performance and because the terminal one isn't Sync
+    let async = Async::new(term.ignore_res())
+        // Especially in test builds, we have quite large bursts of messages, so have more space to
+        // store them.
+        .chan_size(2048)
+        .build();
+    let logger = Logger::root(async.ignore_res(),
+                              o!("app" => format!("{}/{}",
+                                                  env!("CARGO_PKG_NAME"),
+                                                  env!("CARGO_PKG_VERSION"))));
 
-//    let decorator = slog_term::PlainDecorator::new(std::io::stdout());
-//    let drain = slog_term::CompactFormat::new(decorator).build().fuse();
-//    let drain = slog_async::Async::new(drain).build().fuse();
+    let mut config = config::Config::default();
+    config.merge(config::File::with_name("Settings")).unwrap();
+
+    let statsd_client = create_statsd_client(
+        logger.clone(),
+        config.get_str("statsd_host").expect("").as_ref(),
+        config.get_int("statsd_port").expect("") as u16,
+        config.get_str("statsd_prefix").expect("").as_ref(),
+    ).unwrap();
 
     // TODO commands
 
-    start_server()
+    start_server(logger, config, statsd_client)
+}
+
+fn create_statsd_client(logger: Logger, host: &str, port: u16, prefix: &str) -> Result<StatsdClient, Error> {
+    use std::net::{UdpSocket, ToSocketAddrs};
+    use cadence::{QueuingMetricSink};
+
+    let socket = UdpSocket::bind("0.0.0.0:0")?;
+    socket.set_nonblocking(true)?;
+
+    let host_and_port = format!("{}:{}", host, port).to_socket_addrs()?.next().unwrap();
+
+    info!(logger, "Creating StatsD client reporting to {} with prefix '{}'", host_and_port, prefix);
+
+    let udp_sink = cadence::UdpMetricSink::from(host_and_port, socket)?;
+    let queuing_sink = QueuingMetricSink::from(udp_sink);
+
+    Ok(
+        StatsdClient::builder(prefix, queuing_sink)
+            .with_error_handler(move |err| {
+                error!(logger.clone(), "Error while sending stats: {}", err);
+            })
+            .build()
+    )
 }

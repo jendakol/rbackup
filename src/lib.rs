@@ -1,5 +1,6 @@
 #[macro_use]
 extern crate arrayref;
+extern crate cadence;
 extern crate chrono;
 extern crate crypto;
 extern crate env_logger;
@@ -17,9 +18,12 @@ extern crate serde_json;
 extern crate sha2;
 #[macro_use]
 extern crate slog;
+extern crate stopwatch;
 extern crate time;
 extern crate uuid;
 
+use cadence::prelude::*;
+use cadence::StatsdClient;
 use chrono::prelude::*;
 use dao::Dao;
 use encryptor::Encryptor;
@@ -32,6 +36,7 @@ use std::io::Read;
 use std::str;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
+use stopwatch::Stopwatch;
 use structs::*;
 
 pub mod dao;
@@ -44,11 +49,12 @@ struct DigestDataStream {
     hasher: Arc<Mutex<Sha256>>,
     size: Arc<Mutex<u64>>,
     buff: Arc<Mutex<Vec<u8>>>,
-    hash_from_stream: Arc<Mutex<Vec<u8>>>
+    hash_from_stream: Arc<Mutex<Vec<u8>>>,
+    statsd_client: StatsdClient
 }
 
 impl DigestDataStream {
-    pub fn new(stream: DataStream, hasher: Arc<Mutex<Sha256>>, size: Arc<Mutex<u64>>, hash_from_stream: Arc<Mutex<Vec<u8>>>) -> DigestDataStream {
+    pub fn new(stream: DataStream, hasher: Arc<Mutex<Sha256>>, size: Arc<Mutex<u64>>, hash_from_stream: Arc<Mutex<Vec<u8>>>, statsd_client: StatsdClient) -> DigestDataStream {
         let buff = Arc::new(Mutex::new(Vec::new()));
 
         DigestDataStream {
@@ -56,7 +62,8 @@ impl DigestDataStream {
             hasher,
             size,
             buff,
-            hash_from_stream
+            hash_from_stream,
+            statsd_client
         }
     }
 }
@@ -77,6 +84,10 @@ impl Read for DigestDataStream {
                 let mut hasher = self.hasher.lock().unwrap();
 
                 let buff_len = buff.len();
+
+                #[allow(unused_must_use)] {
+                    self.statsd_client.count("upload.bytes", copied as i64);
+                }
 
                 if copied == 0 {
                     if buff_len == 0 { 0 } else {
@@ -131,9 +142,11 @@ pub fn authenticate(dao: &Dao, enc: &Encryptor, session_pass: &str) -> Result<Op
         .map_err(Error::from)
 }
 
-pub fn save(logger: &Logger, repo: &Repo, dao: &Dao, uploaded_file: UploadedFile, data: Data) -> Result<dao::File, Error> {
+pub fn save(logger: &Logger, statsd_client: StatsdClient, repo: &Repo, dao: &Dao, uploaded_file: UploadedFile, data: Data) -> Result<dao::File, Error> {
     let current_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)?;
+
+    let stopwatch = Stopwatch::start_new();
 
     let time_stamp = NaiveDateTime::from_timestamp(current_time.as_secs() as i64, current_time.subsec_nanos());
 
@@ -148,12 +161,16 @@ pub fn save(logger: &Logger, repo: &Repo, dao: &Dao, uploaded_file: UploadedFile
     let hasher = Arc::new(Mutex::new(Sha256::default()));
     let hash_from_stream = Arc::new(Mutex::new(Vec::new()));
     let size = Arc::new(Mutex::new(0u64));
-    let stream = DigestDataStream::new(data.open(), hasher.clone(), size.clone(), hash_from_stream.clone());
+    let stream = DigestDataStream::new(data.open(), hasher.clone(), size.clone(), hash_from_stream.clone(), statsd_client.clone());
 
     repo.repo
         .write(&file_name_final, stream, &encrypt_handle)
         .map_err(Error::from)
         .and_then(|_| {
+            #[allow(unused_must_use)] {
+                statsd_client.time("upload.length", stopwatch.elapsed_ms() as u64);
+            }
+
             let res_size: u64 = Arc::try_unwrap(size).unwrap().into_inner().unwrap();
 
             let hash_calculated = Arc::try_unwrap(hasher).unwrap().into_inner().unwrap().result();

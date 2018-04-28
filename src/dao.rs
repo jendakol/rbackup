@@ -3,9 +3,13 @@ extern crate multimap;
 extern crate mysql;
 extern crate serde;
 extern crate serde_json;
+extern crate stopwatch;
 extern crate time;
 
+use cadence::prelude::*;
+use cadence::StatsdClient;
 use dao::mysql::chrono::prelude::*;
+use dao::stopwatch::Stopwatch;
 use encryptor::Encryptor;
 use failure::Error;
 use hex;
@@ -38,17 +42,33 @@ pub struct FileVersion {
 pub struct Dao {
     pool: mysql::Pool,
     db_name: String,
+    statsd_client: StatsdClient
 }
 
 impl Dao {
-    pub fn new(connection_query: &str, db_name: &str) -> Dao {
+    pub fn new(connection_query: &str, db_name: &str, statsd_client: StatsdClient) -> Dao {
         Dao {
             pool: mysql::Pool::new(connection_query).unwrap(),
             db_name: String::from(db_name),
+            statsd_client
+        }
+    }
+
+//    fn report_counter(&self, name: &str, count: i64) -> () {
+//        #[allow(unused_must_use)] {
+//            self.statsd_client.count(format!("dao.{}", name).as_ref(), count);
+//        }
+//    }
+
+    fn report_timer(&self, name: &str, stopwatch: Stopwatch) -> () {
+        #[allow(unused_must_use)] {
+            self.statsd_client.time(format!("dao.{}", name).as_ref(), stopwatch.elapsed_ms() as u64);
         }
     }
 
     pub fn save_new_version(&self, uploaded_file: &UploadedFile, old_file: Option<File>, new_file_version: FileVersion) -> mysql::error::Result<File> {
+        let stopwatch = Stopwatch::start_new();
+
         match old_file {
             Some(file) => {
                 let r = self.pool.prep_exec(
@@ -59,6 +79,8 @@ impl Dao {
                                    "hash" => &new_file_version.hash,
                                    "storage_name" => &new_file_version.storage_name
                                    })?;
+
+                self.report_timer("insert_file_version", stopwatch);
 
                 let new_id = r.last_insert_id();
 
@@ -83,6 +105,8 @@ impl Dao {
                                    "original_name" => &uploaded_file.name
                                    })?;
 
+                self.report_timer("insert_file", stopwatch);
+
                 // TODO what if now the flow fails - orphaned record in DB!
 
                 let file_id = insert_file_result.last_insert_id();
@@ -101,11 +125,15 @@ impl Dao {
     }
 
     pub fn find_file(&self, device_id: &str, orig_file_name: &str) -> mysql::error::Result<Option<File>> {
+        let stopwatch = Stopwatch::start_new();
+
         self.pool.prep_exec(
             format!("select files.id, device_id, original_name, files_versions.id, size, hash, created, storage_name from {}.files join {}.files_versions on {}.files_versions.file_id = {}.files.id where device_id=:device_id and original_name=:original_name",
                     self.db_name, self.db_name, self.db_name, self.db_name),
             params! { "device_id" => device_id, "original_name" => orig_file_name}
         ).map(|result| {
+            self.report_timer("find_file", stopwatch);
+
             if result.more_results_exists() {
                 // TODO optimize
                 result.map(|x| x.unwrap()).map(|row| {
@@ -139,9 +167,13 @@ impl Dao {
     }
 
     pub fn get_hash_and_storage_name(&self, version_id: u32) -> mysql::error::Result<Option<(String, String)>> {
+        let stopwatch = Stopwatch::start_new();
+
         self.pool.prep_exec(format!("select hash, storage_name from {}.files_versions where id=:version_id", self.db_name),
                             params! {"version_id" => version_id})
             .map(|result| {
+                self.report_timer("get_storage_name", stopwatch);
+
                 result.map(|r| r.unwrap())
                     .map(|row| {
                         mysql::from_row(row)
@@ -151,9 +183,13 @@ impl Dao {
     }
 
     pub fn get_storage_names(&self, file_name: &str) -> mysql::error::Result<Vec<String>> {
+        let stopwatch = Stopwatch::start_new();
+
         self.pool.prep_exec(format!("select storage_name from {}.files_versions join {}.files on {}.files_versions.file_id={}.files.id where {}.files.original_name=:file_name", self.db_name, self.db_name, self.db_name, self.db_name, self.db_name),
                             params! {"file_name" => file_name})
             .map(|result| {
+                self.report_timer("get_storage_names", stopwatch);
+
                 result.map(|r| r.unwrap())
                     .map(|row| {
                         mysql::from_row(row)
@@ -163,10 +199,14 @@ impl Dao {
     }
 
     pub fn list_files(&self, device_id: &str) -> mysql::error::Result<Vec<File>> {
+        let stopwatch = Stopwatch::start_new();
+
         self.pool.prep_exec(
             format!("select files.id, device_id, original_name, files_versions.id, size, hash, created, storage_name from {}.files join {}.files_versions on {}.files_versions.file_id = {}.files.id where device_id=:device_id",
                     self.db_name, self.db_name, self.db_name, self.db_name), params! { "device_id" => device_id}
         ).map(|result| {
+            self.report_timer("list_files", stopwatch);
+
             result.map(|x| x.unwrap()).map(|row| {
                 let (id, device_id, original_name, versionid, size, hash, created, storage_name) = mysql::from_row(row);
 
@@ -195,9 +235,13 @@ impl Dao {
     pub fn remove_file_version(&self, version_id: u32) -> mysql::error::Result<Option<String>> {
         self.get_hash_and_storage_name(version_id)
             .and_then(|st| {
+                let stopwatch = Stopwatch::start_new();
+
                 self.pool.prep_exec(format!("delete from {}.files_versions where id=:version_id limit 1", self.db_name),
                                     params! {"version_id" => version_id})
                     .map(|result| {
+                        self.report_timer("remove_file_version", stopwatch);
+
                         if result.affected_rows() > 0 {
                             st.map(|o| o.1)
                         } else { None }
@@ -208,9 +252,13 @@ impl Dao {
     pub fn remove_file(&self, file_name: &str) -> mysql::error::Result<Option<Vec<String>>> {
         self.get_storage_names(file_name)
             .and_then(|st| {
+                let stopwatch = Stopwatch::start_new();
+
                 self.pool.prep_exec(format!("delete {}.files_versions from {}.files_versions join {}.files on {}.files_versions.file_id={}.files.id where {}.files.original_name=:file_name", self.db_name, self.db_name, self.db_name, self.db_name, self.db_name, self.db_name),
                                     params! {"file_name" => file_name})
                     .map(|result| {
+                        self.report_timer("remove_file", stopwatch);
+
                         if result.affected_rows() == st.len() as u64 {
                             Some(st)
                         } else { None }
@@ -219,8 +267,12 @@ impl Dao {
     }
 
     pub fn get_devices(&self) -> mysql::error::Result<Vec<Device>> {
+        let stopwatch = Stopwatch::start_new();
+
         self.pool.prep_exec(format!("SELECT id from {}.devices", self.db_name), ())
             .map(|result| {
+                self.report_timer("get_devices", stopwatch);
+
                 result.map(|x| x.unwrap()).map(|row| {
                     let device_id = mysql::from_row(row);
                     Device {
@@ -237,8 +289,12 @@ impl Dao {
             hex::encode(&hasher.result())
         };
 
+        let stopwatch = Stopwatch::start_new();
+
         self.pool.prep_exec(format!("SELECT device_id, pass from {}.sessions where id=:id", self.db_name), params!("id" => hashed_pass))
             .map(|result| {
+                self.report_timer("find_session", stopwatch);
+
                 result.map(|x| x.unwrap()).map(|row| {
                     let (device_id, pass) = mysql::from_row(row);
 
@@ -266,8 +322,13 @@ impl Dao {
 
         let repo_pass: String = hex::encode(&enc.encrypt(repo_pass.as_bytes(), pass.as_bytes()).ok().unwrap());
 
+        let stopwatch = Stopwatch::start_new();
+
         self.pool.prep_exec(format!("insert into {}.sessions (id, device_id, pass) values(:id, :device_id, :pass )", self.db_name), params!("id" => hashed_pass, "device_id" => device_id, "pass" => repo_pass ))
-            .map(|_| { pass })
+            .map(|_| {
+                self.report_timer("login", stopwatch);
+                pass
+            })
             .map_err(Error::from)
     }
 }
