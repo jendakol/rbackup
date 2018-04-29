@@ -54,12 +54,6 @@ impl Dao {
         }
     }
 
-//    fn report_counter(&self, name: &str, count: i64) -> () {
-//        #[allow(unused_must_use)] {
-//            self.statsd_client.count(format!("dao.{}", name).as_ref(), count);
-//        }
-//    }
-
     fn report_timer(&self, name: &str, stopwatch: Stopwatch) -> () {
         #[allow(unused_must_use)] {
             self.statsd_client.time(format!("dao.{}", name).as_ref(), stopwatch.elapsed_ms() as u64);

@@ -50,11 +50,11 @@ struct DigestDataStream {
     size: Arc<Mutex<u64>>,
     buff: Arc<Mutex<Vec<u8>>>,
     hash_from_stream: Arc<Mutex<Vec<u8>>>,
-    statsd_client: StatsdClient
+    handle_upload_chunk: Box<Fn(u64) -> () + Send + Sync + 'static>
 }
 
 impl DigestDataStream {
-    pub fn new(stream: DataStream, hasher: Arc<Mutex<Sha256>>, size: Arc<Mutex<u64>>, hash_from_stream: Arc<Mutex<Vec<u8>>>, statsd_client: StatsdClient) -> DigestDataStream {
+    pub fn new(stream: DataStream, hasher: Arc<Mutex<Sha256>>, size: Arc<Mutex<u64>>, hash_from_stream: Arc<Mutex<Vec<u8>>>, handle_upload_chunk: Box<Fn(u64) -> () + Send + Sync + 'static>) -> DigestDataStream {
         let buff = Arc::new(Mutex::new(Vec::new()));
 
         DigestDataStream {
@@ -63,7 +63,7 @@ impl DigestDataStream {
             size,
             buff,
             hash_from_stream,
-            statsd_client
+            handle_upload_chunk
         }
     }
 }
@@ -85,9 +85,7 @@ impl Read for DigestDataStream {
 
                 let buff_len = buff.len();
 
-                #[allow(unused_must_use)] {
-                    self.statsd_client.count("upload.bytes", copied as i64);
-                }
+                (self.handle_upload_chunk)(copied as u64);
 
                 if copied == 0 {
                     if buff_len == 0 { 0 } else {
@@ -143,6 +141,8 @@ pub fn authenticate(dao: &Dao, enc: &Encryptor, session_pass: &str) -> Result<Op
 }
 
 pub fn save(logger: &Logger, statsd_client: StatsdClient, repo: &Repo, dao: &Dao, uploaded_file: UploadedFile, data: Data) -> Result<dao::File, Error> {
+    let statsd_client = Arc::new(statsd_client);
+
     let current_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)?;
 
@@ -150,42 +150,67 @@ pub fn save(logger: &Logger, statsd_client: StatsdClient, repo: &Repo, dao: &Dao
 
     let time_stamp = NaiveDateTime::from_timestamp(current_time.as_secs() as i64, current_time.subsec_nanos());
 
-    debug!(logger, "Current time: {}", time_stamp);
+    let device_id = Arc::new(uploaded_file.device_id.clone());
 
-    let file_name_final = to_storage_name(&uploaded_file.device_id, &uploaded_file.name, time_stamp);
+    let statsd_client2 = statsd_client.clone(); // TODO this is hack!!!
+    let device_id2 = Arc::new(uploaded_file.device_id.clone());
 
-    debug!(logger, "Final name: {}", file_name_final);
+
+    let file_name_final = to_storage_name(&device_id, &uploaded_file.name, time_stamp);
+
+    debug!(logger, "Current time {}, final name {}", time_stamp, file_name_final);
 
     let encrypt_handle = repo.repo.unlock_encrypt(&*repo.pass)?;
 
     let hasher = Arc::new(Mutex::new(Sha256::default()));
     let hash_from_stream = Arc::new(Mutex::new(Vec::new()));
     let size = Arc::new(Mutex::new(0u64));
-    let stream = DigestDataStream::new(data.open(), hasher.clone(), size.clone(), hash_from_stream.clone(), statsd_client.clone());
+    let stream = DigestDataStream::new(data.open(),
+                                       hasher.clone(),
+                                       size.clone(),
+                                       hash_from_stream.clone(),
+                                       Box::from(move |copied_bytes| {
+                                           #[allow(unused_must_use)] {
+                                               let client = statsd_client2.clone();
+                                               client.count("upload.total.bytes", copied_bytes as i64);
+                                               client.count(format!("upload.devices.{}.bytes", &device_id2.clone()).as_ref(), copied_bytes as i64);
+                                           }
+                                       }));
 
     repo.repo
         .write(&file_name_final, stream, &encrypt_handle)
         .map_err(Error::from)
         .and_then(|_| {
+            let duration = stopwatch.elapsed_ms() as u64;
+            let statsd_client = statsd_client.clone();
             #[allow(unused_must_use)] {
-                statsd_client.time("upload.length", stopwatch.elapsed_ms() as u64);
+                statsd_client.time("upload.total.length", duration);
+                statsd_client.time(format!("upload.devices.{}.length", &device_id.clone()).as_ref(), duration);
             }
 
-            let res_size: u64 = Arc::try_unwrap(size).unwrap().into_inner().unwrap();
-
+            let transferred_bytes: u64 = Arc::try_unwrap(size).unwrap().into_inner().unwrap();
             let hash_calculated = Arc::try_unwrap(hasher).unwrap().into_inner().unwrap().result();
             let hash_declared = Arc::try_unwrap(hash_from_stream).unwrap().into_inner().unwrap();
 
-            debug!(logger, "Uploaded file with size {} B, name '{}', declared hash {}", res_size, &uploaded_file.name, hex::encode(&hash_declared));
-
-            if hash_calculated.to_vec() == hash_declared {
-                Ok((hex::encode(&hash_calculated), res_size))
+            if hash_declared.is_empty() {
+                warn!(logger, "Upload from device '{}' wasn't finished, transferred {} B of data in {}", device_id, transferred_bytes, duration);
+                #[allow(unused_must_use)] {
+                    statsd_client.count("upload.total.failed", 1);
+                    statsd_client.count(format!("upload.devices.{}.failed", &device_id.clone()).as_ref(), 1);
+                }
+                Err(Error::from(failures::CustomError::new("Upload wasn't finished properly")))
             } else {
-                warn!(logger, "Declared hash '{}' don't match calculated '{}'", hex::encode(&hash_declared), hex::encode(&hash_calculated));
-                Err(Error::from(failures::CustomError::new("Declared and real sha256 don't match")))
+                debug!(logger, "Uploaded file from device '{}' with size {} B, name '{}', declared hash {}", device_id, transferred_bytes, &uploaded_file.name, hex::encode(&hash_declared));
+
+                if hash_calculated.to_vec() == hash_declared {
+                    Ok((hex::encode(&hash_calculated), transferred_bytes))
+                } else {
+                    warn!(logger, "Declared hash '{}' don't match calculated '{}'", hex::encode(&hash_declared), hex::encode(&hash_calculated));
+                    Err(Error::from(failures::CustomError::new("Declared and real sha256 don't match")))
+                }
             }
         }).and_then(|(hash, size)| {
-        let old_file = dao.find_file(&uploaded_file.device_id, &uploaded_file.name)?;
+        let old_file = dao.find_file(&device_id, &uploaded_file.name)?;
 
         // TODO check whether there is not already last version with the same hash
         let new_version = dao::FileVersion {
