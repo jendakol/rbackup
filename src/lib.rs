@@ -141,8 +141,6 @@ pub fn authenticate(dao: &Dao, enc: &Encryptor, session_pass: &str) -> Result<Op
 }
 
 pub fn save(logger: &Logger, statsd_client: StatsdClient, repo: &Repo, dao: &Dao, uploaded_file: UploadedFile, data: Data) -> Result<dao::File, Error> {
-    let statsd_client = Arc::new(statsd_client);
-
     let current_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)?;
 
@@ -152,9 +150,8 @@ pub fn save(logger: &Logger, statsd_client: StatsdClient, repo: &Repo, dao: &Dao
 
     let device_id = Arc::new(uploaded_file.device_id.clone());
 
-    let statsd_client2 = statsd_client.clone(); // TODO this is hack!!!
-    let device_id2 = Arc::new(uploaded_file.device_id.clone());
-
+    let statsd_client_cp = statsd_client.clone();
+    let device_id_cp = uploaded_file.device_id.clone();
 
     let file_name_final = to_storage_name(&device_id, &uploaded_file.name, time_stamp);
 
@@ -171,21 +168,21 @@ pub fn save(logger: &Logger, statsd_client: StatsdClient, repo: &Repo, dao: &Dao
                                        hash_from_stream.clone(),
                                        Box::from(move |copied_bytes| {
                                            #[allow(unused_must_use)] {
-                                               let client = statsd_client2.clone();
-                                               client.count("upload.total.bytes", copied_bytes as i64);
-                                               client.count(format!("upload.devices.{}.bytes", &device_id2.clone()).as_ref(), copied_bytes as i64);
+                                               statsd_client_cp.count("upload.total.bytes", copied_bytes as i64);
+                                               statsd_client_cp.count(format!("upload.devices.{}.bytes", &device_id_cp.clone()).as_ref(), copied_bytes as i64);
                                            }
                                        }));
+
+    let statsd_client_cp = statsd_client.clone();
 
     repo.repo
         .write(&file_name_final, stream, &encrypt_handle)
         .map_err(Error::from)
         .and_then(|_| {
             let duration = stopwatch.elapsed_ms() as u64;
-            let statsd_client = statsd_client.clone();
             #[allow(unused_must_use)] {
-                statsd_client.time("upload.total.length", duration);
-                statsd_client.time(format!("upload.devices.{}.length", &device_id.clone()).as_ref(), duration);
+                statsd_client_cp.time("upload.total.length", duration);
+                statsd_client_cp.time(format!("upload.devices.{}.length", &device_id.clone()).as_ref(), duration);
             }
 
             let transferred_bytes: u64 = Arc::try_unwrap(size).unwrap().into_inner().unwrap();
