@@ -21,10 +21,11 @@ use rbackup::encryptor::Encryptor;
 use rbackup::structs::*;
 use rdedup::Repo as RdedupRepo;
 use rocket::Data;
-use rocket::http::Status;
+use rocket::http::{ContentType, Status};
 use rocket::Outcome;
 use rocket::request::{self, FromRequest, Request};
 use rocket::response::{Response, status};
+use rocket::response::status::Custom;
 use rocket::State;
 use slog::{Drain, Level, Logger};
 use slog_async::Async;
@@ -143,8 +144,17 @@ fn download(config: State<AppConfig>, headers: Headers, metadata: DownloadMetada
     }
 }
 
-#[post("/upload?<metadata>", format = "application/octet-stream", data = "<data>")]
-fn upload(config: State<AppConfig>, headers: Headers, metadata: UploadMetadata, data: Data) -> status::Custom<String> {
+#[post("/upload?<metadata>", data = "<data>")]
+fn upload(config: State<AppConfig>, headers: Headers, metadata: UploadMetadata, data: Data, cont_type: &ContentType) -> Custom<String> {
+    if !cont_type.is_form_data() {
+        return Custom(
+            Status::BadRequest,
+            "Content-Type not multipart/form-data".into()
+        );
+    }
+
+    let (_, boundary) = cont_type.params().find(|&(k, _)| k == "boundary").unwrap();
+
     with_authentication(&config.logger, &config.dao, &config.encryptor, &headers.session_pass, |device| {
         let uploaded_file_metadata = UploadedFile {
             name: String::from(metadata.file_name.clone()),
@@ -153,9 +163,10 @@ fn upload(config: State<AppConfig>, headers: Headers, metadata: UploadMetadata, 
 
         let repo = Repo::new(config.repo.clone(), device.repo_pass);
 
-        let result = rbackup::save(&config.logger, &repo, &config.dao, uploaded_file_metadata, data)
+        let result = rbackup::save(&config.logger, &repo, &config.dao, uploaded_file_metadata, boundary, data)
             .and_then(|f| { serde_json::to_string(&f).map_err(Error::from) });
 
+        // TODO return bad request for request errors
         match result {
             Ok(file) => status_ok(file),
             Err(e) => status_internal_server_error(e)
@@ -225,7 +236,7 @@ fn start_server() -> () {
     let term = CompactFormat::new(decorator)
         .use_local_timestamp()
         .build()
-        .filter_level(Level::Debug);
+        .filter_level(Level::Info);
     // Run it in a separate thread, both for performance and because the terminal one isn't Sync
     let async = Async::new(term.ignore_res())
         // Especially in test builds, we have quite large bursts of messages, so have more space to
