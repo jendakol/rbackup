@@ -111,7 +111,7 @@ struct UploadedMultipart {
     hash: String
 }
 
-fn process_multipart_upload(logger: &Logger, repo: &Repo, boundary: &str, data: Data, storage_name: &str) -> Result<UploadedMultipart, Error> {
+fn process_multipart_upload(logger: &Logger, statsd_client: StatsdClient, repo: &Repo, boundary: &str, data: Data, storage_name: &str, device_id: String) -> Result<UploadedMultipart, Error> {
     let multipart = Multipart::with_body(data.open(), boundary);
 
     // read file:
@@ -124,25 +124,27 @@ fn process_multipart_upload(logger: &Logger, repo: &Repo, boundary: &str, data: 
 
     debug!(logger, "Handling file upload");
 
-    let data = Arc::new(Mutex::new(DigestDataStreamInner::new(file_entry)));
+    let data_inner = Arc::new(Mutex::new(DigestDataStreamInner::new(file_entry)));
 
-    let stream = DigestDataStream::new(data.clone(),
-    Box::from(move |copied_bytes| {
-        #[allow(unused_must_use)] {
-            statsd_client_cp.count("upload.total.bytes", copied_bytes as i64);
-            statsd_client_cp.count(format!("upload.devices.{}.bytes", &device_id_cp.clone()).as_ref(), copied_bytes as i64);
-        }
-    }));
+    let statsd_client_cp = statsd_client.clone();
+    let device_id_cp = device_id.clone();
+
+    let stream = DigestDataStream::new(data_inner.clone(),
+                                       Box::from(move |copied_bytes| {
+                                           #[allow(unused_must_use)] {
+                                               statsd_client_cp.count("upload.total.bytes", copied_bytes as i64);
+                                               statsd_client_cp.count(&format!("upload.devices.{}.bytes", &device_id_cp), copied_bytes as i64);
+                                           }
+                                       }));
+
     let encrypt_handle = repo.repo.unlock_encrypt(&*repo.pass)?;
     repo.repo.write(storage_name, stream, &encrypt_handle)?;
 
     let data = {
-        Arc::try_unwrap(data).map_err(|_| Error::from(CustomError::new("Could not unlock the file_entry after reading")))?.into_inner()?
+        Arc::try_unwrap(data_inner).map_err(|_| Error::from(CustomError::new("Could not unlock the file_entry after reading")))?.into_inner()?
     };
 
-    let res_size: u64 = data.size;
-
-    let hash_calculated: String = hex::encodedata.hasher.result());
+    let hash_calculated: String = hex::encode(data.hasher.result());
 
     // read file hash:
 
@@ -156,7 +158,7 @@ fn process_multipart_upload(logger: &Logger, repo: &Repo, boundary: &str, data: 
 
     let mut hash_declared: Vec<u8> = Vec::new();
     file_entry.data.read_to_end(&mut hash_declared)?;
-    let hash_declared = String::from_utf8(hash_declared)?;
+    let hash_declared: String = String::from_utf8(hash_declared)?;
 
     debug!(logger, "Declared hash '{}', calculated '{}'", &hash_declared, &hash_calculated);
 
@@ -164,11 +166,15 @@ fn process_multipart_upload(logger: &Logger, repo: &Repo, boundary: &str, data: 
 
     if hash_calculated == hash_declared {
         Ok(UploadedMultipart {
-            size: res_size,
+            size: data.size,
             hash: hash_calculated
         })
     } else {
         warn!(logger, "Declared hash '{}' doesn't match calculated '{}'", &hash_declared, &hash_calculated);
+        #[allow(unused_must_use)] {
+            statsd_client.count("upload.total.failed", 1);
+            statsd_client.count(format!("upload.devices.{}.failed", &device_id).as_ref(), 1);
+        }
         Err(Error::from(failures::CustomError::new("Declared and real sha256 don't match")))
     }
 }
@@ -198,22 +204,19 @@ pub fn save(logger: &Logger, statsd_client: StatsdClient, repo: &Repo, dao: &Dao
     let stopwatch = Stopwatch::start_new();
 
     let time_stamp = NaiveDateTime::from_timestamp(current_time.as_secs() as i64, current_time.subsec_nanos());
-
-    debug!(logger, "Current time: {}", time_stamp);
-
-    let device_id = Arc::new(uploaded_file.device_id.clone());
-
-    let statsd_client_cp = statsd_client.clone();
-    let device_id_cp = uploaded_file.device_id.clone();
-
-
     let storage_name = to_storage_name(&uploaded_file.device_id, &uploaded_file.name, time_stamp);
 
-    debug!(logger, "Final name: {}", storage_name);
+    debug!(logger, "Current time {}, final name {}", time_stamp, storage_name);
 
-    process_multipart_upload(logger, repo, boundary, data, &storage_name)
+    process_multipart_upload(logger, statsd_client.clone(), repo, boundary, data, &storage_name, uploaded_file.device_id.clone())
         .and_then(|uploaded| {
-            debug!(logger, "Uploaded file with size {} B, name '{}', declared hash {}", uploaded.size, &uploaded_file.name, hex::encode(&uploaded.hash));
+            let duration = stopwatch.elapsed_ms() as u64;
+            debug!(logger, "Uploaded file with size {} B, name '{}', declared hash {} in time {}", uploaded.size, &uploaded_file.name, hex::encode(&uploaded.hash), duration);
+
+            #[allow(unused_must_use)] {
+                statsd_client.time("upload.total.length", duration);
+                statsd_client.time(format!("upload.devices.{}.length", uploaded_file.device_id).as_ref(), duration);
+            }
 
             let old_file = dao.find_file(&uploaded_file.device_id, &uploaded_file.name)?;
 
