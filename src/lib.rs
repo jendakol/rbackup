@@ -45,32 +45,57 @@ pub mod encryptor;
 pub mod structs;
 
 struct DigestDataStream {
-    data_stream: ReadablePart,
-    hasher: Arc<Mutex<Sha256>>,
-    size: Arc<Mutex<u64>>
+    inner: Arc<Mutex<DigestDataStreamInner>>
 }
 
 impl DigestDataStream {
-    pub fn new(stream: ReadablePart, hasher: Arc<Mutex<Sha256>>, size: Arc<Mutex<u64>>) -> DigestDataStream {
+    pub fn new(inner: Arc<Mutex<DigestDataStreamInner>>) -> DigestDataStream {
         DigestDataStream {
-            data_stream: stream,
-            hasher,
-            size
+            inner
         }
     }
 }
 
 impl Read for DigestDataStream {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, std::io::Error> {
-        self.data_stream
-            .read(buf)
-            .map(|s| {
-                let mut h = self.hasher.lock().unwrap();
-                h.input(&buf[0..s]);
-                *self.size.lock().unwrap() += s as u64;
+        let mut inner = self.inner.lock().unwrap(); // TODO unwrap
 
+        inner.read(buf)
+            .map(|s| {
+                inner.size_inc(s);
+                inner.hash_update(&buf[0..s]);
                 s
             })
+    }
+}
+
+struct DigestDataStreamInner {
+    file_entry: MultipartField<Multipart<DataStream>>,
+    hasher: Sha256,
+    size: u64
+}
+
+impl DigestDataStreamInner {
+    pub fn new(file_entry: MultipartField<Multipart<DataStream>>) -> DigestDataStreamInner {
+        DigestDataStreamInner {
+            file_entry,
+            hasher: Sha256::default(),
+            size: 0
+        }
+    }
+
+    pub fn size_inc(&mut self, s: usize) -> () {
+        self.size += s as u64;
+    }
+
+    pub fn hash_update(&mut self, bytes: &[u8]) -> () {
+        self.hasher.input(bytes);
+    }
+}
+
+impl Read for DigestDataStreamInner {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.file_entry.data.read(buf)
     }
 }
 
@@ -80,22 +105,7 @@ struct UploadedMultipart {
     hash: String
 }
 
-struct ReadablePart {
-    inner: Arc<Mutex<MultipartField<Multipart<DataStream>>>>
-}
-
-impl Read for ReadablePart {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.inner.lock().unwrap().data.read(buf)
-    }
-}
-
 fn process_multipart_upload(logger: &Logger, repo: &Repo, boundary: &str, data: Data, storage_name: &str) -> Result<UploadedMultipart, Error> {
-    let encrypt_handle = repo.repo.unlock_encrypt(&*repo.pass)?;
-
-    let hasher = Arc::new(Mutex::new(Sha256::default()));
-    let size = Arc::new(Mutex::new(0u64));
-
     let multipart = Multipart::with_body(data.open(), boundary);
 
     // read file:
@@ -108,28 +118,23 @@ fn process_multipart_upload(logger: &Logger, repo: &Repo, boundary: &str, data: 
 
     debug!(logger, "Handling file upload");
 
-    let file_entry = Arc::new(Mutex::new(file_entry));
+    let data = Arc::new(Mutex::new(DigestDataStreamInner::new(file_entry)));
 
-    let data = ReadablePart {
-        inner: file_entry.clone()
-    };
-
-    let stream = DigestDataStream::new(data, hasher.clone(), size.clone());
+    let stream = DigestDataStream::new(data.clone());
+    let encrypt_handle = repo.repo.unlock_encrypt(&*repo.pass)?;
     repo.repo.write(storage_name, stream, &encrypt_handle)?;
 
-    let res_size: u64 = {
-        Arc::try_unwrap(size).map_err(|_| Error::from(CustomError::new("Could not unlock the size for reading")))?.into_inner()?
+    let data = {
+        Arc::try_unwrap(data).map_err(|_| Error::from(CustomError::new("Could not unlock the file_entry after reading")))?.into_inner()?
     };
 
-    let hash_calculated: String = hex::encode({
-        Arc::try_unwrap(hasher).map_err(|_| Error::from(CustomError::new("Could not unlock the hash for reading")))?.into_inner()?.result()
-    });
+    let res_size: u64 = data.size;
+
+    let hash_calculated: String = hex::encodedata.hasher.result());
 
     // read file hash:
 
-    let file_entry: MultipartField<Multipart<DataStream>> = {
-        Arc::try_unwrap(file_entry).map_err(|_| Error::from(CustomError::new("Could not unlock the data stream")))?.into_inner()?
-    };
+    let file_entry: MultipartField<Multipart<DataStream>> = data.file_entry;
 
     let mut file_entry = match file_entry.next_entry() {
         ReadEntryResult::Entry(entry) => entry,
