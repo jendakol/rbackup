@@ -24,10 +24,11 @@ use rbackup::encryptor::Encryptor;
 use rbackup::structs::*;
 use rdedup::Repo as RdedupRepo;
 use rocket::Data;
-use rocket::http::Status;
+use rocket::http::{ContentType, Status};
 use rocket::Outcome;
 use rocket::request::{self, FromRequest, Request};
 use rocket::response::{Response, status};
+use rocket::response::status::Custom;
 use rocket::State;
 use slog::{Drain, Level, Logger};
 use slog_async::Async;
@@ -171,9 +172,18 @@ fn download(config: State<AppConfig>, headers: Headers, metadata: DownloadMetada
     }
 }
 
-#[post("/upload?<metadata>", format = "application/octet-stream", data = "<data>")]
-fn upload(config: State<AppConfig>, headers: Headers, metadata: UploadMetadata, data: Data) -> status::Custom<String> {
+#[post("/upload?<metadata>", data = "<data>")]
+fn upload(config: State<AppConfig>, headers: Headers, metadata: UploadMetadata, data: Data, cont_type: &ContentType) -> Custom<String> {
     #[allow(unused_must_use)] { config.statsd_client.count("requests.upload", 1); }
+
+    if !cont_type.is_form_data() {
+        return Custom(
+            Status::BadRequest,
+            "Content-Type not multipart/form-data".into()
+        );
+    }
+
+    let (_, boundary) = cont_type.params().find(|&(k, _)| k == "boundary").unwrap();
 
     with_authentication(&config.logger, &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
         let uploaded_file_metadata = UploadedFile {
@@ -183,9 +193,10 @@ fn upload(config: State<AppConfig>, headers: Headers, metadata: UploadMetadata, 
 
         let repo = Repo::new(config.repo.clone(), device.repo_pass);
 
-        let result = rbackup::save(&config.logger, config.statsd_client.clone(), &repo, &config.dao, uploaded_file_metadata, data)
+        let result = rbackup::save(&config.logger, config.statsd_client.clone(), &repo, &config.dao, uploaded_file_metadata, boundary, data)
             .and_then(|f| { serde_json::to_string(&f).map_err(Error::from) });
 
+        // TODO return bad request for request errors
         match result {
             Ok(file) => status_ok(file),
             Err(e) => status_internal_server_error(e)
@@ -315,6 +326,29 @@ fn start_server(logger: Logger, config: config::Config, statsd_client: StatsdCli
         .launch();
 }
 
+fn create_statsd_client(logger: Logger, host: &str, port: u16, prefix: &str) -> Result<StatsdClient, Error> {
+    use std::net::{UdpSocket, ToSocketAddrs};
+    use cadence::{QueuingMetricSink};
+
+    let socket = UdpSocket::bind("0.0.0.0:0")?;
+    socket.set_nonblocking(true)?;
+
+    let host_and_port = format!("{}:{}", host, port).to_socket_addrs()?.next().unwrap();
+
+    info!(logger, "Creating StatsD client reporting to {} with prefix '{}'", host_and_port, prefix);
+
+    let udp_sink = cadence::UdpMetricSink::from(host_and_port, socket)?;
+    let queuing_sink = QueuingMetricSink::from(udp_sink);
+
+    Ok(
+        StatsdClient::builder(prefix, queuing_sink)
+            .with_error_handler(move |err| {
+                error!(logger.clone(), "Error while sending stats: {}", err);
+            })
+            .build()
+    )
+}
+
 fn main() {
     // This bit configures a logger
     // The nice colored stderr logger
@@ -347,27 +381,4 @@ fn main() {
     // TODO commands
 
     start_server(logger, config, statsd_client)
-}
-
-fn create_statsd_client(logger: Logger, host: &str, port: u16, prefix: &str) -> Result<StatsdClient, Error> {
-    use std::net::{UdpSocket, ToSocketAddrs};
-    use cadence::{QueuingMetricSink};
-
-    let socket = UdpSocket::bind("0.0.0.0:0")?;
-    socket.set_nonblocking(true)?;
-
-    let host_and_port = format!("{}:{}", host, port).to_socket_addrs()?.next().unwrap();
-
-    info!(logger, "Creating StatsD client reporting to {} with prefix '{}'", host_and_port, prefix);
-
-    let udp_sink = cadence::UdpMetricSink::from(host_and_port, socket)?;
-    let queuing_sink = QueuingMetricSink::from(udp_sink);
-
-    Ok(
-        StatsdClient::builder(prefix, queuing_sink)
-            .with_error_handler(move |err| {
-                error!(logger.clone(), "Error while sending stats: {}", err);
-            })
-            .build()
-    )
 }

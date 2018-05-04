@@ -7,6 +7,7 @@ extern crate env_logger;
 extern crate failure;
 extern crate hex;
 extern crate multimap;
+extern crate multipart;
 #[macro_use]
 extern crate mysql;
 extern crate pipe;
@@ -28,6 +29,8 @@ use chrono::prelude::*;
 use dao::Dao;
 use encryptor::Encryptor;
 use failure::Error;
+use failures::*;
+use multipart::server::{Multipart, MultipartField, ReadEntry, ReadEntryResult};
 use rocket::data::Data;
 use rocket::data::DataStream;
 use sha2::{Digest, Sha256};
@@ -45,80 +48,128 @@ pub mod encryptor;
 pub mod structs;
 
 struct DigestDataStream {
-    data_stream: DataStream,
-    hasher: Arc<Mutex<Sha256>>,
-    size: Arc<Mutex<u64>>,
-    buff: Arc<Mutex<Vec<u8>>>,
-    hash_from_stream: Arc<Mutex<Vec<u8>>>,
+    inner: Arc<Mutex<DigestDataStreamInner>>,
     handle_upload_chunk: Box<Fn(u64) -> () + Send + Sync + 'static>
 }
 
 impl DigestDataStream {
-    pub fn new(stream: DataStream, hasher: Arc<Mutex<Sha256>>, size: Arc<Mutex<u64>>, hash_from_stream: Arc<Mutex<Vec<u8>>>, handle_upload_chunk: Box<Fn(u64) -> () + Send + Sync + 'static>) -> DigestDataStream {
-        let buff = Arc::new(Mutex::new(Vec::new()));
-
+    pub fn new(inner: Arc<Mutex<DigestDataStreamInner>>, handle_upload_chunk: Box<Fn(u64) -> () + Send + Sync + 'static>) -> DigestDataStream {
         DigestDataStream {
-            data_stream: stream,
-            hasher,
-            size,
-            buff,
-            hash_from_stream,
+            inner,
             handle_upload_chunk
         }
     }
 }
 
 impl Read for DigestDataStream {
-    fn read(&mut self, target_buff: &mut [u8]) -> Result<usize, std::io::Error> {
-        let target_buff_length = target_buff.len();
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, std::io::Error> {
+        let mut inner = self.inner.lock().unwrap(); // TODO unwrap
 
-        let mut buff = self.buff.lock().unwrap();
-
-        let capacity = target_buff_length + 32 - buff.len();
-        let mut tmp_buff: Vec<u8> = Vec::with_capacity(capacity);
-        tmp_buff.resize(capacity, 0);
-
-        self.data_stream
-            .read(&mut tmp_buff)
-            .map(|copied| {
-                let mut hasher = self.hasher.lock().unwrap();
-
-                let buff_len = buff.len();
-
-                (self.handle_upload_chunk)(copied as u64);
-
-                if copied == 0 {
-                    if buff_len == 0 { 0 } else {
-                        let curr_buff = buff.clone();
-
-                        let hash = &curr_buff[(buff_len - 32)..];
-                        let to_return = &curr_buff[0..(buff_len - 32)];
-
-                        *self.hash_from_stream.lock().unwrap() = hash.to_vec(); // we have final hash
-                        *buff = Vec::new();
-
-                        target_buff[0..to_return.len()].clone_from_slice(to_return);
-                        hasher.input(to_return);
-                        *self.size.lock().unwrap() += to_return.len() as u64;
-                        to_return.len()
-                    }
-                } else {
-                    let mut current = buff.clone();
-                    current.append(&mut tmp_buff.as_mut_slice()[0..copied].to_vec());
-
-                    *buff = current[(current.len() - 32)..].to_vec();
-
-                    // val toReturn = current.dropRight(hashSize).take(targetBufferLength) - no nned for the min
-                    let to_return = &current[0..(current.len() - 32)][0..std::cmp::min(target_buff_length, current.len() - 32)];
-
-                    target_buff[0..to_return.len()].clone_from_slice(to_return);
-
-                    hasher.input(to_return);
-                    *self.size.lock().unwrap() += to_return.len() as u64;
-
-                    to_return.len()
-                }
+        inner.read(buf)
+            .map(|s| {
+                inner.size_inc(s);
+                inner.hash_update(&buf[0..s]);
+                (self.handle_upload_chunk)(s as u64);
+                s
             })
+    }
+}
+
+struct DigestDataStreamInner {
+    file_entry: MultipartField<Multipart<DataStream>>,
+    hasher: Sha256,
+    size: u64
+}
+
+impl DigestDataStreamInner {
+    pub fn new(file_entry: MultipartField<Multipart<DataStream>>) -> DigestDataStreamInner {
+        DigestDataStreamInner {
+            file_entry,
+            hasher: Sha256::default(),
+            size: 0
+        }
+    }
+
+    pub fn size_inc(&mut self, s: usize) -> () {
+        self.size += s as u64;
+    }
+
+    pub fn hash_update(&mut self, bytes: &[u8]) -> () {
+        self.hasher.input(bytes);
+    }
+}
+
+impl Read for DigestDataStreamInner {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.file_entry.data.read(buf)
+    }
+}
+
+#[derive(Debug)]
+struct UploadedMultipart {
+    size: u64,
+    hash: String
+}
+
+fn process_multipart_upload(logger: &Logger, repo: &Repo, boundary: &str, data: Data, storage_name: &str) -> Result<UploadedMultipart, Error> {
+    let multipart = Multipart::with_body(data.open(), boundary);
+
+    // read file:
+
+    let file_entry: MultipartField<Multipart<DataStream>> = match multipart.read_entry() {
+        ReadEntryResult::Entry(entry) => entry,
+        ReadEntryResult::End(_) => return Err(Error::from(CustomError::new("'file' part is missing"))),
+        ReadEntryResult::Error(_, err) => return Err(Error::from(err))
+    };
+
+    debug!(logger, "Handling file upload");
+
+    let data = Arc::new(Mutex::new(DigestDataStreamInner::new(file_entry)));
+
+    let stream = DigestDataStream::new(data.clone(),
+    Box::from(move |copied_bytes| {
+        #[allow(unused_must_use)] {
+            statsd_client_cp.count("upload.total.bytes", copied_bytes as i64);
+            statsd_client_cp.count(format!("upload.devices.{}.bytes", &device_id_cp.clone()).as_ref(), copied_bytes as i64);
+        }
+    }));
+    let encrypt_handle = repo.repo.unlock_encrypt(&*repo.pass)?;
+    repo.repo.write(storage_name, stream, &encrypt_handle)?;
+
+    let data = {
+        Arc::try_unwrap(data).map_err(|_| Error::from(CustomError::new("Could not unlock the file_entry after reading")))?.into_inner()?
+    };
+
+    let res_size: u64 = data.size;
+
+    let hash_calculated: String = hex::encodedata.hasher.result());
+
+    // read file hash:
+
+    let file_entry: MultipartField<Multipart<DataStream>> = data.file_entry;
+
+    let mut file_entry = match file_entry.next_entry() {
+        ReadEntryResult::Entry(entry) => entry,
+        ReadEntryResult::End(_) => return Err(Error::from(CustomError::new("'file-hash' part is missing"))),
+        ReadEntryResult::Error(_, err) => return Err(Error::from(err))
+    };
+
+    let mut hash_declared: Vec<u8> = Vec::new();
+    file_entry.data.read_to_end(&mut hash_declared)?;
+    let hash_declared = String::from_utf8(hash_declared)?;
+
+    debug!(logger, "Declared hash '{}', calculated '{}'", &hash_declared, &hash_calculated);
+
+    // check hash and return
+
+    if hash_calculated == hash_declared {
+        Ok(UploadedMultipart {
+            size: res_size,
+            hash: hash_calculated
+        })
+    } else {
+        warn!(logger, "Declared hash '{}' doesn't match calculated '{}'", &hash_declared, &hash_calculated);
+        Err(Error::from(failures::CustomError::new("Declared and real sha256 don't match")))
     }
 }
 
@@ -140,7 +191,7 @@ pub fn authenticate(dao: &Dao, enc: &Encryptor, session_pass: &str) -> Result<Op
         .map_err(Error::from)
 }
 
-pub fn save(logger: &Logger, statsd_client: StatsdClient, repo: &Repo, dao: &Dao, uploaded_file: UploadedFile, data: Data) -> Result<dao::File, Error> {
+pub fn save(logger: &Logger, statsd_client: StatsdClient, repo: &Repo, dao: &Dao, uploaded_file: UploadedFile, boundary: &str, data: Data) -> Result<dao::File, Error> {
     let current_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)?;
 
@@ -148,78 +199,35 @@ pub fn save(logger: &Logger, statsd_client: StatsdClient, repo: &Repo, dao: &Dao
 
     let time_stamp = NaiveDateTime::from_timestamp(current_time.as_secs() as i64, current_time.subsec_nanos());
 
+    debug!(logger, "Current time: {}", time_stamp);
+
     let device_id = Arc::new(uploaded_file.device_id.clone());
 
     let statsd_client_cp = statsd_client.clone();
     let device_id_cp = uploaded_file.device_id.clone();
 
-    let file_name_final = to_storage_name(&device_id, &uploaded_file.name, time_stamp);
 
-    debug!(logger, "Current time {}, final name {}", time_stamp, file_name_final);
+    let storage_name = to_storage_name(&uploaded_file.device_id, &uploaded_file.name, time_stamp);
 
-    let encrypt_handle = repo.repo.unlock_encrypt(&*repo.pass)?;
+    debug!(logger, "Final name: {}", storage_name);
 
-    let hasher = Arc::new(Mutex::new(Sha256::default()));
-    let hash_from_stream = Arc::new(Mutex::new(Vec::new()));
-    let size = Arc::new(Mutex::new(0u64));
-    let stream = DigestDataStream::new(data.open(),
-                                       hasher.clone(),
-                                       size.clone(),
-                                       hash_from_stream.clone(),
-                                       Box::from(move |copied_bytes| {
-                                           #[allow(unused_must_use)] {
-                                               statsd_client_cp.count("upload.total.bytes", copied_bytes as i64);
-                                               statsd_client_cp.count(format!("upload.devices.{}.bytes", &device_id_cp.clone()).as_ref(), copied_bytes as i64);
-                                           }
-                                       }));
+    process_multipart_upload(logger, repo, boundary, data, &storage_name)
+        .and_then(|uploaded| {
+            debug!(logger, "Uploaded file with size {} B, name '{}', declared hash {}", uploaded.size, &uploaded_file.name, hex::encode(&uploaded.hash));
 
-    let statsd_client_cp = statsd_client.clone();
+            let old_file = dao.find_file(&uploaded_file.device_id, &uploaded_file.name)?;
 
-    repo.repo
-        .write(&file_name_final, stream, &encrypt_handle)
-        .map_err(Error::from)
-        .and_then(|_| {
-            let duration = stopwatch.elapsed_ms() as u64;
-            #[allow(unused_must_use)] {
-                statsd_client_cp.time("upload.total.length", duration);
-                statsd_client_cp.time(format!("upload.devices.{}.length", &device_id.clone()).as_ref(), duration);
-            }
+            // TODO check whether there is not already last version with the same hash
+            let new_version = dao::FileVersion {
+                version: 0, // cannot know now, will be filled in after DB insertion
+                size: uploaded.size,
+                hash: uploaded.hash,
+                created: time_stamp,
+                storage_name
+            };
 
-            let transferred_bytes: u64 = Arc::try_unwrap(size).unwrap().into_inner().unwrap();
-            let hash_calculated = Arc::try_unwrap(hasher).unwrap().into_inner().unwrap().result();
-            let hash_declared = Arc::try_unwrap(hash_from_stream).unwrap().into_inner().unwrap();
-
-            if hash_declared.is_empty() {
-                warn!(logger, "Upload from device '{}' wasn't finished, transferred {} B of data in {}", device_id, transferred_bytes, duration);
-                #[allow(unused_must_use)] {
-                    statsd_client.count("upload.total.failed", 1);
-                    statsd_client.count(format!("upload.devices.{}.failed", &device_id.clone()).as_ref(), 1);
-                }
-                Err(Error::from(failures::CustomError::new("Upload wasn't finished properly")))
-            } else {
-                debug!(logger, "Uploaded file from device '{}' with size {} B, name '{}', declared hash {}", device_id, transferred_bytes, &uploaded_file.name, hex::encode(&hash_declared));
-
-                if hash_calculated.to_vec() == hash_declared {
-                    Ok((hex::encode(&hash_calculated), transferred_bytes))
-                } else {
-                    warn!(logger, "Declared hash '{}' don't match calculated '{}'", hex::encode(&hash_declared), hex::encode(&hash_calculated));
-                    Err(Error::from(failures::CustomError::new("Declared and real sha256 don't match")))
-                }
-            }
-        }).and_then(|(hash, size)| {
-        let old_file = dao.find_file(&device_id, &uploaded_file.name)?;
-
-        // TODO check whether there is not already last version with the same hash
-        let new_version = dao::FileVersion {
-            version: 0, // cannot know now, will be filled in after DB insertion
-            size,
-            hash: hash.clone(),
-            created: time_stamp,
-            storage_name: file_name_final
-        };
-
-        dao.save_new_version(&uploaded_file, old_file, new_version).map_err(Error::from)
-    })
+            dao.save_new_version(&uploaded_file, old_file, new_version).map_err(Error::from)
+        })
 }
 
 pub fn load(logger: Logger, repo: &Repo, dao: &Dao, version_id: u32) -> Result<Option<(String, Box<Read>)>, Error> {
