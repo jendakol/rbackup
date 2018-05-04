@@ -24,7 +24,7 @@ use rocket::Data;
 use rocket::http::{ContentType, Status};
 use rocket::Outcome;
 use rocket::request::{self, FromRequest, Request};
-use rocket::response::{Response, status, Stream};
+use rocket::response::{Response, status};
 use rocket::response::status::Custom;
 use rocket::State;
 use slog::{Drain, Level, Logger};
@@ -166,6 +166,7 @@ fn upload(config: State<AppConfig>, headers: Headers, metadata: UploadMetadata, 
         let result = rbackup::save(&config.logger, &repo, &config.dao, uploaded_file_metadata, boundary, data)
             .and_then(|f| { serde_json::to_string(&f).map_err(Error::from) });
 
+        // TODO return bad request for request errors
         match result {
             Ok(file) => status_ok(file),
             Err(e) => status_internal_server_error(e)

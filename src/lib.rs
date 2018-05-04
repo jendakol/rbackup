@@ -27,14 +27,13 @@ use chrono::prelude::*;
 use dao::Dao;
 use encryptor::Encryptor;
 use failure::Error;
-use multipart::server::{*, Multipart, MultipartData};
-use rocket::data::{self, FromData};
+use failures::*;
+use multipart::server::{Multipart, MultipartField, ReadEntry, ReadEntryResult};
 use rocket::data::Data;
 use rocket::data::DataStream;
 use sha2::{Digest, Sha256};
 use slog::Logger;
-use std::any::Any;
-use std::io::{Cursor, Read};
+use std::io::Read;
 use std::str;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -46,13 +45,13 @@ pub mod encryptor;
 pub mod structs;
 
 struct DigestDataStream {
-    data_stream: Box<Read>,
+    data_stream: ReadablePart,
     hasher: Arc<Mutex<Sha256>>,
     size: Arc<Mutex<u64>>
 }
 
 impl DigestDataStream {
-    pub fn new(stream: Box<Read>, hasher: Arc<Mutex<Sha256>>, size: Arc<Mutex<u64>>) -> DigestDataStream {
+    pub fn new(stream: ReadablePart, hasher: Arc<Mutex<Sha256>>, size: Arc<Mutex<u64>>) -> DigestDataStream {
         DigestDataStream {
             data_stream: stream,
             hasher,
@@ -81,42 +80,78 @@ struct UploadedMultipart {
     hash: String
 }
 
+struct ReadablePart {
+    inner: Arc<Mutex<MultipartField<Multipart<DataStream>>>>
+}
+
+impl Read for ReadablePart {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.inner.lock().unwrap().data.read(buf)
+    }
+}
+
 fn process_multipart_upload(logger: &Logger, repo: &Repo, boundary: &str, data: Data, storage_name: &str) -> Result<UploadedMultipart, Error> {
     let encrypt_handle = repo.repo.unlock_encrypt(&*repo.pass)?;
 
     let hasher = Arc::new(Mutex::new(Sha256::default()));
-    let hash_from_stream = Arc::new(Mutex::new(Vec::new()));
     let size = Arc::new(Mutex::new(0u64));
 
-    let mut multipart = Multipart::with_body(data.open(), boundary);
+    let multipart = Multipart::with_body(data.open(), boundary);
 
     // read file:
 
-    let file_entry = multipart.read_entry().expect("File part is missing");
+    let file_entry: MultipartField<Multipart<DataStream>> = match multipart.read_entry() {
+        ReadEntryResult::Entry(entry) => entry,
+        ReadEntryResult::End(_) => return Err(Error::from(CustomError::new("'file' part is missing"))),
+        ReadEntryResult::Error(_, err) => return Err(Error::from(err))
+    };
 
-    info!(logger, "Handling file upload");
+    debug!(logger, "Handling file upload");
 
-    let stream = DigestDataStream::new(Box::from(file_entry.data), hasher.clone(), size.clone());
+    let file_entry = Arc::new(Mutex::new(file_entry));
+
+    let data = ReadablePart {
+        inner: file_entry.clone()
+    };
+
+    let stream = DigestDataStream::new(data, hasher.clone(), size.clone());
     repo.repo.write(storage_name, stream, &encrypt_handle)?;
 
-    let res_size: u64 = Arc::try_unwrap(size).unwrap().into_inner().unwrap();
+    let res_size: u64 = {
+        Arc::try_unwrap(size).map_err(|_| Error::from(CustomError::new("Could not unlock the size for reading")))?.into_inner()?
+    };
 
-    let hash_calculated = Arc::try_unwrap(hasher).unwrap().into_inner().unwrap().result();
+    let hash_calculated: String = hex::encode({
+        Arc::try_unwrap(hasher).map_err(|_| Error::from(CustomError::new("Could not unlock the hash for reading")))?.into_inner()?.result()
+    });
 
-    // read file hash
+    // read file hash:
 
-    // TODO read second part with the hash
-    let hash_declared: Vec<u8> = Vec::new();
+    let file_entry: MultipartField<Multipart<DataStream>> = {
+        Arc::try_unwrap(file_entry).map_err(|_| Error::from(CustomError::new("Could not unlock the data stream")))?.into_inner()?
+    };
+
+    let mut file_entry = match file_entry.next_entry() {
+        ReadEntryResult::Entry(entry) => entry,
+        ReadEntryResult::End(_) => return Err(Error::from(CustomError::new("'file-hash' part is missing"))),
+        ReadEntryResult::Error(_, err) => return Err(Error::from(err))
+    };
+
+    let mut hash_declared: Vec<u8> = Vec::new();
+    file_entry.data.read_to_end(&mut hash_declared)?;
+    let hash_declared = String::from_utf8(hash_declared)?;
+
+    debug!(logger, "Declared hash '{}', calculated '{}'", &hash_declared, &hash_calculated);
 
     // check hash and return
 
-    if hash_calculated.to_vec() == hash_declared {
+    if hash_calculated == hash_declared {
         Ok(UploadedMultipart {
             size: res_size,
-            hash: hex::encode(&hash_calculated)
+            hash: hash_calculated
         })
     } else {
-        warn!(logger, "Declared hash '{}' don't match calculated '{}'", hex::encode(&hash_declared), hex::encode(&hash_calculated));
+        warn!(logger, "Declared hash '{}' doesn't match calculated '{}'", &hash_declared, &hash_calculated);
         Err(Error::from(failures::CustomError::new("Declared and real sha256 don't match")))
     }
 }
