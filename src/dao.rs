@@ -12,8 +12,10 @@ use dao::mysql::chrono::prelude::*;
 use dao::stopwatch::Stopwatch;
 use encryptor::Encryptor;
 use failure::Error;
+use failures::CustomError;
 use hex;
 use sha2::*;
+use std::time::{SystemTime, UNIX_EPOCH};
 use structs::*;
 use uuid::Uuid;
 
@@ -37,6 +39,17 @@ pub struct FileVersion {
     pub hash: String,
     pub created: NaiveDateTime,
     pub storage_name: String
+}
+
+pub enum RegisterResult {
+    Created(String),
+    Exists
+}
+
+pub enum LoginResult {
+    NewSession(String),
+    ExistingSession(String),
+    AccountNotFound
 }
 
 pub struct Dao {
@@ -285,12 +298,12 @@ impl Dao {
 
         let stopwatch = Stopwatch::start_new();
 
-        self.pool.prep_exec(format!("SELECT device_id, pass from {}.sessions where id=:id", self.db_name), params!("id" => hashed_pass))
+        self.pool.prep_exec(format!("SELECT device_id, account_id, pass from {}.sessions where id=:id", self.db_name), params!("id" => hashed_pass))
             .map(|result| {
                 self.report_timer("find_session", stopwatch);
 
                 result.map(|x| x.unwrap()).map(|row| {
-                    let (device_id, pass) = mysql::from_row(row);
+                    let (device_id, account_id, pass) = mysql::from_row(row);
 
                     let pass: String = pass;
                     let pass = hex::decode(pass).expect("Could not convert hex to bytes");
@@ -299,14 +312,76 @@ impl Dao {
 
                     DeviceIdentity {
                         id: device_id,
+                        account_id,
                         repo_pass: String::from_utf8(real_pass).expect("Could not convert repo pass to UTF-8")
                     }
                 }).into_iter().next()
             })
     }
 
-    pub fn login(&self, enc: &Encryptor, device_id: &str, repo_pass: &str) -> Result<String, Error> {
-        let pass = Uuid::new_v4().hyphenated().to_string();
+    pub fn login(&self, enc: &Encryptor, device_id: &str, username: &str, pass: &str) -> Result<LoginResult, Error> {
+        let hashed_pass: String = {
+            let mut hasher = Sha256::new();
+            hasher.input(pass.as_bytes());
+            hex::encode(&hasher.result())
+        };
+
+        let stopwatch = Stopwatch::start_new();
+
+        let find_account_result: Option<String> = {
+            self.pool.prep_exec(format!("select id from {}.accounts where username=:username and password=:pass limit 1", self.db_name), params!("username" => username, "pass" => &hashed_pass))
+                .map(|r| r.map(|x| x.unwrap())
+                    .map(|row| {
+                        let s: String = mysql::from_row(row);
+                        s
+                    }).into_iter().next())?
+        };
+
+        match find_account_result {
+            Some(account_id) => {
+                let find_session_result: Option<String> = {
+                    self.pool.prep_exec(format!("select id from {}.sessions where device_id=:device_id and account_id=:account_id limit 1", self.db_name), params!("device_id" => device_id, "account_id"=>&account_id))
+                        .map(|r| r.map(|x| x.unwrap())
+                            .map(|row| {
+                                let s: String = mysql::from_row(row);
+                                s
+                            }).into_iter().next())?
+                };
+
+                let new_session_id = Uuid::new_v4().hyphenated().to_string();
+
+                let hashed_session_id: String = {
+                    let mut hasher = Sha256::new();
+                    hasher.input(new_session_id.as_bytes());
+                    hex::encode(&hasher.result())
+                };
+
+                let encrypted_pass: String = hex::encode(&enc.encrypt(pass.as_bytes(), new_session_id.as_bytes()).ok().unwrap());
+
+                let stopwatch = Stopwatch::start_new();
+
+                self.pool.prep_exec(format!("insert into {}.sessions (id, account_id, device_id, pass) values(:id, :account_id, :device_id, :pass )", self.db_name), params!("id" => hashed_session_id, "account_id" => &account_id, "device_id" => device_id, "pass" => encrypted_pass ))
+                    .map(|_| {
+                        self.report_timer("login", stopwatch);
+
+                        match find_session_result {
+                            Some(_) => LoginResult::ExistingSession(new_session_id),
+                            None => LoginResult::NewSession(new_session_id)
+                        }
+                    })
+                    .map_err(Error::from)
+            },
+            None => {
+                self.report_timer("loginNotFound", stopwatch);
+                Ok(LoginResult::AccountNotFound)
+            }
+        }
+    }
+
+    pub fn register(&self, username: &str, pass: &str) -> Result<RegisterResult, Error> {
+        // TODO check format of username
+
+        let stopwatch = Stopwatch::start_new();
 
         let hashed_pass: String = {
             let mut hasher = Sha256::new();
@@ -314,15 +389,33 @@ impl Dao {
             hex::encode(&hasher.result())
         };
 
-        let repo_pass: String = hex::encode(&enc.encrypt(repo_pass.as_bytes(), pass.as_bytes()).ok().unwrap());
+        let find_result = self.pool.prep_exec(format!("select id from {}.accounts where username=:username and password=:pass limit 1", self.db_name), params!("username" => username, "pass" => &hashed_pass))?;
 
-        let stopwatch = Stopwatch::start_new();
+        if find_result.count() == 0 {
+            let account_id = Dao::create_account_id(username, &hashed_pass);
 
-        self.pool.prep_exec(format!("insert into {}.sessions (id, device_id, pass) values(:id, :device_id, :pass )", self.db_name), params!("id" => hashed_pass, "device_id" => device_id, "pass" => repo_pass ))
-            .map(|_| {
-                self.report_timer("login", stopwatch);
-                pass
-            })
-            .map_err(Error::from)
+            let insert_result = self.pool.prep_exec(format!("insert into {}.accounts (id, username, password) values (:id, :username, :pass)", self.db_name), params!("id" => &account_id ,"username" => username, "pass" => hashed_pass))?;
+
+            self.report_timer("register", stopwatch);
+
+            if insert_result.affected_rows() == 1 {
+                Ok(RegisterResult::Created(account_id))
+            } else {
+                Err(Error::from(CustomError::new("")))
+            }
+        } else {
+            self.report_timer("registerExists", stopwatch);
+            Ok(RegisterResult::Exists)
+        }
+    }
+
+    fn create_account_id(username: &str, pass: &str) -> String {
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+
+        let mut hasher = Sha256::new();
+        hasher.input(format!("{:?}", now).as_bytes());
+        hasher.input(username.as_bytes());
+        hasher.input(pass.as_bytes());
+        hex::encode(&hasher.result())
     }
 }

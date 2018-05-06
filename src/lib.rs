@@ -12,6 +12,7 @@ extern crate multipart;
 extern crate mysql;
 extern crate pipe;
 extern crate rdedup_lib as rdedup;
+extern crate rdedup_lib;
 extern crate rocket;
 #[macro_use]
 extern crate serde_derive;
@@ -31,6 +32,7 @@ use encryptor::Encryptor;
 use failure::Error;
 use failures::*;
 use multipart::server::{Multipart, MultipartField, ReadEntry, ReadEntryResult};
+use rdedup::Repo as RdedupRepo;
 use rocket::data::Data;
 use rocket::data::DataStream;
 use sha2::{Digest, Sha256};
@@ -179,17 +181,27 @@ fn process_multipart_upload(logger: &Logger, statsd_client: StatsdClient, repo: 
     }
 }
 
-pub fn login(repo: &rdedup::Repo, dao: &Dao, enc: &Encryptor, device_id: &str, repo_pass: &str) -> Result<String, Error> {
-    // TODO check existing record
-
-    // TODO check secret file in repo
-    repo.unlock_decrypt(&*Box::new(move || { Ok(String::from(repo_pass)) }))
-        .map_err(Error::from)
-        .and_then(|_| {
-            dao.login(enc, device_id, repo_pass)
-                .map_err(Error::from)
+pub fn register(logger: &Logger, dao: &Dao, username: &str, pass: &str) -> Result<u16, Error> {
+    dao.register(username, pass)
+        .and_then(|r| match r {
+            dao::RegisterResult::Created(account_id) => {
+                info!(logger, "Registered new account with ID {}", account_id);
+                RdedupRepo::init(&std::path::Path::new(&format!("/data/deduprepo/{}", account_id)), &*Box::new(move || { Ok(String::from(pass)) }), rdedup::settings::Repo::new(), logger.clone()).
+                    map(|_| 201) /* HTTP 201 CREATED */
+                    .map_err(Error::from)
+            },
+            dao::RegisterResult::Exists => Ok(409) /* HTTP 409 CONFLICT */
         })
-        .map(|session_id| { format!(r#"{{ "session_id": "{}" }}"#, session_id) })
+}
+
+pub fn login(dao: &Dao, enc: &Encryptor, device_id: &str, username: &str, pass: &str) -> Result<(u16, String), Error> {
+    dao.login(enc, device_id, username, pass)
+        .map_err(Error::from)
+        .map(|r| match r {
+            dao::LoginResult::NewSession(session_id) => (201, format!(r#"{{ "session_id": "{}" }}"#, session_id)),
+            dao::LoginResult::ExistingSession(session_id) => (200, format!(r#"{{ "session_id": "{}" }}"#, session_id)),
+            dao::LoginResult::AccountNotFound => (401, String::from("Cannot authenticate"))
+        })
 }
 
 pub fn authenticate(dao: &Dao, enc: &Encryptor, session_pass: &str) -> Result<Option<DeviceIdentity>, Error> {

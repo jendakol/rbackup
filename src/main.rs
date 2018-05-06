@@ -22,7 +22,6 @@ use failure::Error;
 use rbackup::dao::Dao;
 use rbackup::encryptor::Encryptor;
 use rbackup::structs::*;
-use rdedup::Repo as RdedupRepo;
 use rocket::Data;
 use rocket::http::{ContentType, Status};
 use rocket::Outcome;
@@ -33,8 +32,6 @@ use rocket::State;
 use slog::{Drain, Level, Logger};
 use slog_async::Async;
 use slog_term::{CompactFormat, TermDecorator};
-use std::io::{Error as IoError, ErrorKind};
-use std::path::Path;
 
 #[derive(FromForm)]
 struct UploadMetadata {
@@ -59,7 +56,14 @@ struct RemoveFileVersionMetadata {
 #[derive(FromForm)]
 struct LoginMetadata {
     device_id: String,
-    repo_pass: String
+    username: String,
+    password: String
+}
+
+#[derive(FromForm)]
+struct RegisterMetadata {
+    username: String,
+    password: String
 }
 
 struct Headers {
@@ -85,25 +89,48 @@ impl<'a, 'r> FromRequest<'a, 'r> for Headers {
     }
 }
 
-#[get("/login?<metadata>")]
+#[get("/account/register?<metadata>")]
+fn register(config: State<AppConfig>, metadata: RegisterMetadata) -> status::Custom<String> {
+    #[allow(unused_must_use)] {
+        config.statsd_client.count("requests.register", 1);
+        config.statsd_client.count("requests.total", 1);
+    }
+
+    match rbackup::register(&config.logger, &config.dao, &metadata.username, &metadata.password) {
+        Ok(code) => {
+            #[allow(unused_must_use)] {
+                config.statsd_client.count("register.ok", 1);
+            }
+            status::Custom(Status::raw(code), String::new())
+        },
+        Err(e) => {
+            #[allow(unused_must_use)] {
+                config.statsd_client.count("register.failed", 1);
+            }
+            status_internal_server_error(e)
+        },
+    }
+}
+
+#[get("/account/login?<metadata>")]
 fn login(config: State<AppConfig>, metadata: LoginMetadata) -> status::Custom<String> {
     #[allow(unused_must_use)] {
         config.statsd_client.count("requests.login", 1);
         config.statsd_client.count("requests.total", 1);
     }
 
-    match rbackup::login(&config.repo, &config.dao, &config.encryptor, &metadata.device_id, &metadata.repo_pass) {
-        Ok(pass) => {
+    match rbackup::login(&config.dao, &config.encryptor, &metadata.device_id, &metadata.username, &metadata.password) {
+        Ok((code, msg)) => {
             #[allow(unused_must_use)] {
                 config.statsd_client.count("login.ok", 1);
             }
-            status::Custom(Status::Ok, pass)
+            status::Custom(Status::raw(code), msg)
         },
-        Err(_) => {
+        Err(e) => {
             #[allow(unused_must_use)] {
                 config.statsd_client.count("login.failed", 1);
             }
-            status::Custom(Status::Unauthorized, "Cannot authenticate".to_string())
+            status_internal_server_error(e)
         },
     }
 }
@@ -114,8 +141,18 @@ fn list(config: State<AppConfig>, headers: Headers) -> status::Custom<String> {
 
     with_authentication(&config.logger, &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
         match rbackup::list(&config.dao, &device.id) {
-            Ok(list) => status_ok(list),
-            Err(e) => status_internal_server_error(e)
+            Ok(list) => {
+                #[allow(unused_must_use)] {
+                    config.statsd_client.count("list.ok", 1);
+                }
+                status_ok(list)
+            },
+            Err(e) => {
+                #[allow(unused_must_use)] {
+                    config.statsd_client.count("list.failed", 1);
+                }
+                status_internal_server_error(e)
+            }
         }
     })
 }
@@ -132,9 +169,8 @@ fn download(config: State<AppConfig>, headers: Headers, metadata: DownloadMetada
             #[allow(unused_must_use)] { config.statsd_client.count("authentication.ok", 1); }
             debug!(config.logger, "Opening repo");
 
-            let repo = Repo::new(config.repo.clone(), device.repo_pass);
-
-            rbackup::load(config.logger.clone(), &repo, &config.dao, metadata.file_version_id)
+            Repo::new(&config.repo_root, &device.account_id, device.repo_pass, config.logger.clone())
+                .and_then(|repo| rbackup::load(config.logger.clone(), &repo, &config.dao, metadata.file_version_id))
                 .and_then(|o| {
                     match o {
                         Some((hash, read)) => {
@@ -191,14 +227,15 @@ fn upload(config: State<AppConfig>, headers: Headers, metadata: UploadMetadata, 
             device_id: String::from(device.id)
         };
 
-        let repo = Repo::new(config.repo.clone(), device.repo_pass);
-
-        let result = rbackup::save(&config.logger, config.statsd_client.clone(), &repo, &config.dao, uploaded_file_metadata, boundary, data)
+        let result = Repo::new(&config.repo_root, &device.account_id, device.repo_pass, config.logger.clone())
+            .and_then(|repo| {
+                rbackup::save(&config.logger, config.statsd_client.clone(), &repo, &config.dao, uploaded_file_metadata, boundary, data)
+            })
             .and_then(|f| { serde_json::to_string(&f).map_err(Error::from) });
 
         // TODO return bad request for request errors
         match result {
-            Ok(file) => status_ok(file),
+            Ok(file) => status::Custom(Status::Created, file),
             Err(e) => status_internal_server_error(e)
         }
     })
@@ -209,9 +246,12 @@ fn remove_file_version(config: State<AppConfig>, headers: Headers, metadata: Rem
     #[allow(unused_must_use)] { config.statsd_client.count("requests.remove_file_version", 1); }
 
     with_authentication(&config.logger, &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
-        let repo = Repo::new(config.repo.clone(), device.repo_pass);
+        let r = Repo::new(&config.repo_root, &device.account_id, device.repo_pass, config.logger.clone())
+            .and_then(|repo| {
+                rbackup::remove_file_version(&repo, &config.dao, metadata.file_version_id)
+            });
 
-        match rbackup::remove_file_version(&repo, &config.dao, metadata.file_version_id) {
+        match r {
             Ok((status, body)) => status::Custom(Status::raw(status), body),
             Err(e) => status_internal_server_error(e)
         }
@@ -223,9 +263,12 @@ fn remove_file(config: State<AppConfig>, headers: Headers, metadata: RemoveFileM
     #[allow(unused_must_use)] { config.statsd_client.count("requests.remove_file", 1); }
 
     with_authentication(&config.logger, &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
-        let repo = Repo::new(config.repo.clone(), device.repo_pass);
+        let r = Repo::new(&config.repo_root, &device.account_id, device.repo_pass, config.logger.clone())
+            .and_then(|repo| {
+                rbackup::remove_file(&repo, &config.dao, &metadata.file_name)
+            });
 
-        match rbackup::remove_file(&repo, &config.dao, &metadata.file_name) {
+        match r {
             Ok((status, body)) => status::Custom(Status::raw(status), body),
             Err(e) => status_internal_server_error(e)
         }
@@ -264,7 +307,7 @@ fn status_ok(s: String) -> status::Custom<String> {
 }
 
 struct AppConfig {
-    repo: RdedupRepo,
+    repo_root: String,
     dao: Dao,
     encryptor: Encryptor,
     logger: slog::Logger,
@@ -272,14 +315,7 @@ struct AppConfig {
 }
 
 fn start_server(logger: Logger, config: config::Config, statsd_client: StatsdClient) -> () {
-
-    // open Repo
-
-    let repo = config.get_str("repo_dir")
-        .map_err(|e| IoError::new(ErrorKind::NotFound, e))
-        .and_then(|repo_dir| {
-            RdedupRepo::open(&Path::new(&repo_dir), logger.clone())
-        }).expect("Could not open repo");
+    let repo_root = config.get_str("data_dir").expect("Could not access data dir");
 
     // create DAO
 
@@ -316,8 +352,9 @@ fn start_server(logger: Logger, config: config::Config, statsd_client: StatsdCli
         .mount("/", routes![remove_file])
         .mount("/", routes![remove_file_version])
         .mount("/", routes![login])
+        .mount("/", routes![register])
         .manage(AppConfig {
-            repo,
+            repo_root,
             dao,
             encryptor: Encryptor::new(secret.clone()),
             logger,
