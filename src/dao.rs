@@ -8,49 +8,17 @@ extern crate time;
 
 use cadence::prelude::*;
 use cadence::StatsdClient;
-use dao::mysql::chrono::prelude::*;
 use dao::stopwatch::Stopwatch;
 use encryptor::Encryptor;
 use failure::Error;
 use failures::CustomError;
 use hex;
+use results::*;
 use sha2::*;
+use slog::Logger;
 use std::time::{SystemTime, UNIX_EPOCH};
 use structs::*;
 use uuid::Uuid;
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct Device {
-    pub id: String
-}
-
-#[derive(Debug, PartialEq, Eq, Hash, Serialize)]
-pub struct File {
-    pub id: u64,
-    pub device_id: String,
-    pub original_name: String,
-    pub versions: Vec<FileVersion>
-}
-
-#[derive(Debug, PartialEq, Eq, Hash, Serialize, Clone)]
-pub struct FileVersion {
-    pub version: u64,
-    pub size: u64,
-    pub hash: String,
-    pub created: NaiveDateTime,
-    pub storage_name: String
-}
-
-pub enum RegisterResult {
-    Created(String),
-    Exists
-}
-
-pub enum LoginResult {
-    NewSession(String),
-    ExistingSession(String),
-    AccountNotFound
-}
 
 pub struct Dao {
     pool: mysql::Pool,
@@ -189,11 +157,11 @@ impl Dao {
             })
     }
 
-    pub fn get_storage_names(&self, file_name: &str) -> mysql::error::Result<Vec<String>> {
+    pub fn get_storage_names(&self, device_id: &str, file_name: &str) -> mysql::error::Result<Vec<String>> {
         let stopwatch = Stopwatch::start_new();
 
-        self.pool.prep_exec(format!("select storage_name from {}.files_versions join {}.files on {}.files_versions.file_id={}.files.id where {}.files.original_name=:file_name", self.db_name, self.db_name, self.db_name, self.db_name, self.db_name),
-                            params! {"file_name" => file_name})
+        self.pool.prep_exec(format!("select storage_name from {}.files_versions join {}.files on {}.files_versions.file_id={}.files.id where {}.files.original_name=:file_name and {}.files.device_id=:device_id", self.db_name, self.db_name, self.db_name, self.db_name, self.db_name, self.db_name),
+                            params! {"file_name" => file_name, "device_id" => device_id})
             .map(|result| {
                 self.report_timer("get_storage_names", stopwatch);
 
@@ -205,7 +173,7 @@ impl Dao {
             })
     }
 
-    pub fn list_files(&self, device_id: &str) -> mysql::error::Result<Vec<File>> {
+    pub fn list_files(&self, device_id: &str) -> mysql::error::Result<Option<Vec<File>>> {
         let stopwatch = Stopwatch::start_new();
 
         self.pool.prep_exec(
@@ -214,7 +182,7 @@ impl Dao {
         ).map(|result| {
             self.report_timer("list_files", stopwatch);
 
-            result.map(|x| x.unwrap()).map(|row| {
+            let files: Vec<File> = result.map(|x| x.unwrap()).map(|row| {
                 let (id, device_id, original_name, versionid, size, hash, created, storage_name) = mysql::from_row(row);
 
                 (
@@ -235,7 +203,13 @@ impl Dao {
                     original_name,
                     versions
                 }
-            }).collect()
+            }).collect();
+
+            if files.len() >= 1 {
+                Some(files)
+            } else {
+                None
+            }
         })
     }
 
@@ -256,35 +230,45 @@ impl Dao {
             })
     }
 
-    pub fn remove_file(&self, file_name: &str) -> mysql::error::Result<Option<Vec<String>>> {
-        self.get_storage_names(file_name)
+    pub fn remove_file(&self, logger: &Logger, device_id: &str, file_name: &str) -> Result<Option<Vec<String>>, Error> {
+        debug!(logger, "Deleting file versions for file '{}' from device {}", file_name, device_id);
+
+        self.get_storage_names(device_id, file_name)
+            .map_err(Error::from)
             .and_then(|st| {
                 let stopwatch = Stopwatch::start_new();
 
-                self.pool.prep_exec(format!("delete {}.files_versions from {}.files_versions join {}.files on {}.files_versions.file_id={}.files.id where {}.files.original_name=:file_name", self.db_name, self.db_name, self.db_name, self.db_name, self.db_name, self.db_name),
-                                    params! {"file_name" => file_name})
-                    .map(|result| {
-                        self.report_timer("remove_file", stopwatch);
+                if st.len() >= 1 {
+                    self.pool.prep_exec(format!("delete {}.files_versions from {}.files_versions join {}.files on {}.files_versions.file_id={}.files.id where {}.files.original_name=:file_name and {}.files.device_id=:device_id", self.db_name, self.db_name, self.db_name, self.db_name, self.db_name, self.db_name, self.db_name),
+                                        params! {"file_name" => file_name, "device_id" => device_id})
+                        .map_err(Error::from)
+                        .and_then(|result| {
+                            self.report_timer("remove_file", stopwatch);
 
-                        if result.affected_rows() == st.len() as u64 {
-                            Some(st)
-                        } else { None }
-                    })
-            })
+                            let deleted = result.affected_rows();
+
+                            debug!(logger, "Deleted file versions: {}", deleted);
+
+                            if deleted == st.len() as u64 {
+                                Ok(Some(st))
+                            } else { Err(Error::from(CustomError::new("Could not delete all"))) }
+                        })
+                } else {
+                    Ok(None)
+                }
+            }).map_err(Error::from)
     }
 
-    pub fn get_devices(&self) -> mysql::error::Result<Vec<Device>> {
+    pub fn get_devices(&self, account_id: &str) -> mysql::error::Result<Vec<String>> {
         let stopwatch = Stopwatch::start_new();
 
-        self.pool.prep_exec(format!("SELECT id from {}.devices", self.db_name), ())
+        self.pool.prep_exec(format!("SELECT distinct device_id from {}.sessions where account_id=:account_id", self.db_name), params! {"account_id" => account_id})
             .map(|result| {
                 self.report_timer("get_devices", stopwatch);
 
                 result.map(|x| x.unwrap()).map(|row| {
-                    let device_id = mysql::from_row(row);
-                    Device {
-                        id: device_id
-                    }
+                    let device_id: String = mysql::from_row(row);
+                    device_id
                 }).collect()
             })
     }

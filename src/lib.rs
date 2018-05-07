@@ -33,6 +33,7 @@ use failure::Error;
 use failures::*;
 use multipart::server::{Multipart, MultipartField, ReadEntry, ReadEntryResult};
 use rdedup::Repo as RdedupRepo;
+use results::*;
 use rocket::data::Data;
 use rocket::data::DataStream;
 use sha2::{Digest, Sha256};
@@ -48,6 +49,7 @@ pub mod dao;
 mod failures;
 pub mod encryptor;
 pub mod structs;
+pub mod results;
 
 struct DigestDataStream {
     inner: Arc<Mutex<DigestDataStreamInner>>,
@@ -107,13 +109,7 @@ impl Read for DigestDataStreamInner {
     }
 }
 
-#[derive(Debug)]
-struct UploadedMultipart {
-    size: u64,
-    hash: String
-}
-
-fn process_multipart_upload(logger: &Logger, statsd_client: StatsdClient, repo: &Repo, boundary: &str, data: Data, storage_name: &str, device_id: String) -> Result<UploadedMultipart, Error> {
+fn process_multipart_upload(logger: &Logger, statsd_client: StatsdClient, repo: &Repo, boundary: &str, data: Data, storage_name: &str, device_id: String) -> Result<UploadedData, Error> {
     let multipart = Multipart::with_body(data.open(), boundary);
 
     // read file:
@@ -167,41 +163,33 @@ fn process_multipart_upload(logger: &Logger, statsd_client: StatsdClient, repo: 
     // check hash and return
 
     if hash_calculated == hash_declared {
-        Ok(UploadedMultipart {
-            size: data.size,
-            hash: hash_calculated
-        })
+        Ok(UploadedData::Success(data.size, hash_calculated))
     } else {
         warn!(logger, "Declared hash '{}' doesn't match calculated '{}'", &hash_declared, &hash_calculated);
         #[allow(unused_must_use)] {
             statsd_client.count("upload.total.failed", 1);
             statsd_client.count(format!("upload.devices.{}.failed", &device_id).as_ref(), 1);
         }
-        Err(Error::from(failures::CustomError::new("Declared and real sha256 don't match")))
+        Ok(UploadedData::MismatchSha256)
     }
 }
 
-pub fn register(logger: &Logger, dao: &Dao, username: &str, pass: &str) -> Result<u16, Error> {
+pub fn register(logger: &Logger, dao: &Dao, username: &str, pass: &str) -> Result<RegisterResult, Error> {
     dao.register(username, pass)
         .and_then(|r| match r {
-            dao::RegisterResult::Created(account_id) => {
+            RegisterResult::Created(account_id) => {
                 info!(logger, "Registered new account with ID {}", account_id);
-                RdedupRepo::init(&std::path::Path::new(&format!("/data/deduprepo/{}", account_id)), &*Box::new(move || { Ok(String::from(pass)) }), rdedup::settings::Repo::new(), logger.clone()).
-                    map(|_| 201) /* HTTP 201 CREATED */
+                RdedupRepo::init(&std::path::Path::new(&format!("/data/deduprepo/{}", account_id)), &*Box::new(move || { Ok(String::from(pass)) }), rdedup::settings::Repo::new(), logger.clone())
+                    .map(|_| RegisterResult::Created(account_id))
                     .map_err(Error::from)
             },
-            dao::RegisterResult::Exists => Ok(409) /* HTTP 409 CONFLICT */
+            RegisterResult::Exists => Ok(RegisterResult::Exists)
         })
 }
 
-pub fn login(dao: &Dao, enc: &Encryptor, device_id: &str, username: &str, pass: &str) -> Result<(u16, String), Error> {
+pub fn login(dao: &Dao, enc: &Encryptor, device_id: &str, username: &str, pass: &str) -> Result<results::LoginResult, Error> {
     dao.login(enc, device_id, username, pass)
         .map_err(Error::from)
-        .map(|r| match r {
-            dao::LoginResult::NewSession(session_id) => (201, format!(r#"{{ "session_id": "{}" }}"#, session_id)),
-            dao::LoginResult::ExistingSession(session_id) => (200, format!(r#"{{ "session_id": "{}" }}"#, session_id)),
-            dao::LoginResult::AccountNotFound => (401, String::from("Cannot authenticate"))
-        })
 }
 
 pub fn authenticate(dao: &Dao, enc: &Encryptor, session_pass: &str) -> Result<Option<DeviceIdentity>, Error> {
@@ -209,7 +197,7 @@ pub fn authenticate(dao: &Dao, enc: &Encryptor, session_pass: &str) -> Result<Op
         .map_err(Error::from)
 }
 
-pub fn save(logger: &Logger, statsd_client: StatsdClient, repo: &Repo, dao: &Dao, uploaded_file: UploadedFile, boundary: &str, data: Data) -> Result<dao::File, Error> {
+pub fn save(logger: &Logger, statsd_client: StatsdClient, repo: &Repo, dao: &Dao, uploaded_file: UploadedFile, boundary: &str, data: Data) -> Result<UploadResult, Error> {
     let current_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)?;
 
@@ -221,27 +209,32 @@ pub fn save(logger: &Logger, statsd_client: StatsdClient, repo: &Repo, dao: &Dao
     debug!(logger, "Current time {}, final name {}", time_stamp, storage_name);
 
     process_multipart_upload(logger, statsd_client.clone(), repo, boundary, data, &storage_name, uploaded_file.device_id.clone())
-        .and_then(|uploaded| {
-            let duration = stopwatch.elapsed_ms() as u64;
-            debug!(logger, "Uploaded file with size {} B, name '{}', declared hash {} in time {}", uploaded.size, &uploaded_file.name, hex::encode(&uploaded.hash), duration);
+        .and_then(|uploaded| match uploaded {
+            UploadedData::Success(size, hash) => {
+                let duration = stopwatch.elapsed_ms() as u64;
+                debug!(logger, "Uploaded file with size {} B, name '{}', declared hash {} in time {}", size, &uploaded_file.name, hex::encode(&hash), duration);
 
-            #[allow(unused_must_use)] {
-                statsd_client.time("upload.total.length", duration);
-                statsd_client.time(format!("upload.devices.{}.length", uploaded_file.device_id).as_ref(), duration);
-            }
+                #[allow(unused_must_use)] {
+                    statsd_client.time("upload.total.length", duration);
+                    statsd_client.time(format!("upload.devices.{}.length", uploaded_file.device_id).as_ref(), duration);
+                }
 
-            let old_file = dao.find_file(&uploaded_file.device_id, &uploaded_file.name)?;
+                let old_file = dao.find_file(&uploaded_file.device_id, &uploaded_file.name)?;
 
-            // TODO check whether there is not already last version with the same hash
-            let new_version = dao::FileVersion {
-                version: 0, // cannot know now, will be filled in after DB insertion
-                size: uploaded.size,
-                hash: uploaded.hash,
-                created: time_stamp,
-                storage_name
-            };
+                // TODO check whether there is not already last version with the same hash
+                let new_version = FileVersion {
+                    version: 0, // cannot know now, will be filled in after DB insertion
+                    size,
+                    hash,
+                    created: time_stamp,
+                    storage_name
+                };
 
-            dao.save_new_version(&uploaded_file, old_file, new_version).map_err(Error::from)
+                dao.save_new_version(&uploaded_file, old_file, new_version)
+                    .map(UploadResult::Success)
+                    .map_err(Error::from)
+            },
+            UploadedData::MismatchSha256 => Ok(UploadResult::MismatchSha256)
         })
 }
 
@@ -270,45 +263,52 @@ pub fn load(logger: Logger, repo: &Repo, dao: &Dao, version_id: u32) -> Result<O
         }).map_err(Error::from)
 }
 
-pub fn list(dao: &Dao, device_id: &str) -> Result<String, Error> {
-    let res = dao.list_files(device_id)?;
-    Ok(serde_json::to_string(&res)?)
+pub fn list_files(dao: &Dao, device_id: &str) -> Result<ListFileResult, Error> {
+    dao.list_files(device_id)
+        .map(|r| match r {
+            Some(list) => ListFileResult::Success(list),
+            None => ListFileResult::DeviceNotFound
+        }).map_err(Error::from)
 }
 
-pub fn remove_file_version(repo: &Repo, dao: &Dao, version_id: u32) -> Result<(u16, String), Error> {
+pub fn list_devices(dao: &Dao, account_id: &str) -> Result<String, Error> {
+    let res = dao.get_devices(account_id)?;
+
+    serde_json::to_string(&res)
+        .map_err(Error::from)
+}
+
+pub fn remove_file_version(repo: &Repo, dao: &Dao, version_id: u32) -> Result<RemoveFileVersionResult, Error> {
     dao.remove_file_version(version_id)
-        .map(|opt| {
-            opt.map(|storage_name| {
-                match repo.repo.rm(&storage_name) {
-                    Ok(_) => (200 as u16, String::from("")),
-                    Err(e) => (500 as u16, format!("{}", e))
-                }
-            }).or(Some((404 as u16, String::from("File was not found")))).unwrap()
-        }).map_err(Error::from)
+        .map_err(Error::from)
+        .map(|opt| opt.map(|sn| repo.repo.rm(&sn).map_err(Error::from)))
+        .and_then(|r| match r {
+            Some(Ok(_)) => Ok(RemoveFileVersionResult::Success),
+            None => Ok(RemoveFileVersionResult::FileNotFound),
+            Some(Err(e)) => Err(e)
+        })
 }
 
-pub fn remove_file(repo: &Repo, dao: &Dao, file_name: &str) -> Result<(u16, String), Error> {
-    dao.remove_file(file_name)
-        .map(|opt_storage_names| {
-            match opt_storage_names {
-                Some(storage_names) => {
-                    let (_, failures): (Vec<_>, Vec<_>) = storage_names
-                        .into_iter()
-                        .map(|storage_name| {
-                            repo.repo.rm(&storage_name)
-                        }).partition(Result::is_ok);
+pub fn remove_file(logger: &Logger, repo: &Repo, dao: &Dao, device_id: &str, file_name: &str) -> Result<RemoveFileResult, Error> {
+    dao.remove_file(logger, device_id, file_name)
+        .map(|opt| match opt {
+            Some(storage_names) => {
+                let (_, failures): (Vec<_>, Vec<_>) = storage_names
+                    .into_iter()
+                    .map(|storage_name| {
+                        repo.repo.rm(&storage_name)
+                    }).partition(Result::is_ok);
 
-                    let failures: Vec<_> = failures.into_iter().map(Result::unwrap_err).collect();
+                let failures: Vec<_> = failures.into_iter().map(Result::unwrap_err).collect();
 
-                    if failures.is_empty() {
-                        (200 as u16, String::from(""))
-                    } else {
-                        (500 as u16, format!("{:?}", failures))
-                    }
+                if failures.is_empty() {
+                    RemoveFileResult::Success
+                } else {
+                    RemoveFileResult::PartialFailure(failures)
                 }
-                None => (500 as u16, String::from("Error while deleting"))
-            }
-        }).map_err(Error::from)
+            },
+            None => RemoveFileResult::FileNotFound
+        })
 }
 
 fn to_storage_name(pc_id: &str, orig_file_name: &str, time_stamp: NaiveDateTime) -> String {
