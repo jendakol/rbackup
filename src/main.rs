@@ -15,6 +15,7 @@ extern crate serde_json;
 extern crate slog;
 extern crate slog_async;
 extern crate slog_term;
+extern crate stopwatch;
 
 use cadence::prelude::*;
 use cadence::StatsdClient;
@@ -28,11 +29,12 @@ use rocket::http::{ContentType, Status};
 use rocket::Outcome;
 use rocket::request::{self, FromRequest, Request};
 use rocket::response::{Response, status};
-use rocket::response::status::Custom;
 use rocket::State;
 use slog::{Drain, Level, Logger};
 use slog_async::Async;
 use slog_term::{CompactFormat, TermDecorator};
+
+type HandlerResult<T> = Result<T, status::Custom<String>>;
 
 #[derive(FromForm)]
 struct UploadMetadata {
@@ -96,102 +98,38 @@ impl<'a, 'r> FromRequest<'a, 'r> for Headers {
 }
 
 #[get("/account/register?<metadata>")]
-fn register(config: State<AppConfig>, metadata: RegisterMetadata) -> Result<RegisterResult, status::Custom<String>> {
-    #[allow(unused_must_use)] {
-        config.statsd_client.count("requests.register", 1);
-        config.statsd_client.count("requests.total", 1);
-    }
-
-    match rbackup::register(&config.logger, &config.dao, &metadata.username, &metadata.password) {
-        Ok(res) => {
-            #[allow(unused_must_use)] {
-                config.statsd_client.count("register.ok", 1);
-            }
-            Ok(res)
-        },
-        Err(e) => {
-            #[allow(unused_must_use)] {
-                config.statsd_client.count("register.failed", 1);
-            }
-            Err(status_internal_server_error(e))
-        },
-    }
+fn register(config: State<AppConfig>, metadata: RegisterMetadata) -> HandlerResult<RegisterResult> {
+    with_metrics(&config.statsd_client, "register", || {
+        rbackup::register(&config.logger, &config.dao, &metadata.username, &metadata.password)
+            .map_err(status_internal_server_error)
+    })
 }
 
 #[get("/account/login?<metadata>")]
-fn login(config: State<AppConfig>, metadata: LoginMetadata) -> Result<LoginResult, status::Custom<String>> {
-    #[allow(unused_must_use)] {
-        config.statsd_client.count("requests.login", 1);
-        config.statsd_client.count("requests.total", 1);
-    }
-
-    match rbackup::login(&config.dao, &config.encryptor, &metadata.device_id, &metadata.username, &metadata.password) {
-        Ok(res) => {
-            #[allow(unused_must_use)] {
-                config.statsd_client.count("login.ok", 1);
-            }
-            Ok(res)
-        },
-        Err(e) => {
-            #[allow(unused_must_use)] {
-                config.statsd_client.count("login.failed", 1);
-            }
-            Err(status_internal_server_error(e))
-        },
-    }
+fn login(config: State<AppConfig>, metadata: LoginMetadata) -> HandlerResult<LoginResult> {
+    with_metrics(&config.statsd_client, "login", || {
+        rbackup::login(&config.dao, &config.encryptor, &metadata.device_id, &metadata.username, &metadata.password)
+            .map_err(status_internal_server_error)
+    })
 }
 
 #[get("/list/files?<metadata>")]
-fn list_files(config: State<AppConfig>, headers: Headers, metadata: ListFilesMetadata) -> Result<ListFileResult, status::Custom<String>> {
-    #[allow(unused_must_use)] { config.statsd_client.count("requests.list_files", 1); }
-
-    with_authentication(&config.logger, &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
-        match rbackup::list_files(&config.dao, &metadata.device_id.unwrap_or(device.id)) {
-            Ok(list) => {
-                #[allow(unused_must_use)] {
-                    config.statsd_client.count("list_files.ok", 1);
-                }
-                Ok(list)
-            },
-            Err(e) => {
-                #[allow(unused_must_use)] {
-                    config.statsd_client.count("list_files.failed", 1);
-                }
-                Err(e)
-            }
-        }
+fn list_files(config: State<AppConfig>, headers: Headers, metadata: ListFilesMetadata) -> HandlerResult<ListFileResult> {
+    with_authentication(&config.logger, "list_files", &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
+        rbackup::list_files(&config.dao, &metadata.device_id.unwrap_or(device.id))
     })
 }
 
 #[get("/list/devices")]
-fn list_devices(config: State<AppConfig>, headers: Headers) -> Result<String, status::Custom<String>> {
-    #[allow(unused_must_use)] { config.statsd_client.count("requests.list_devices", 1); }
-
-    with_authentication(&config.logger, &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
-        match rbackup::list_devices(&config.dao, &device.account_id) {
-            Ok(list) => {
-                #[allow(unused_must_use)] {
-                    config.statsd_client.count("list.ok", 1);
-                }
-                Ok(list)
-            },
-            Err(e) => {
-                #[allow(unused_must_use)] {
-                    config.statsd_client.count("list.failed", 1);
-                }
-                Err(e)
-            }
-        }
+fn list_devices(config: State<AppConfig>, headers: Headers) -> HandlerResult<String> {
+    with_authentication(&config.logger, "list_devices", &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
+        rbackup::list_devices(&config.dao, &device.account_id)
     })
 }
 
 #[get("/download?<metadata>")]
-fn download(config: State<AppConfig>, headers: Headers, metadata: DownloadMetadata) -> Result<Response, status::Custom<String>> {
-    #[allow(unused_must_use)] {
-        config.statsd_client.count("requests.download", 1);
-    }
-
-    with_authentication(&config.logger, &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
+fn download(config: State<AppConfig>, headers: Headers, metadata: DownloadMetadata) -> HandlerResult<Response> {
+    with_authentication(&config.logger, "download", &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
         debug!(config.logger, "Opening repo");
 
         Repo::new(&config.repo_root, &device.account_id, device.repo_pass, config.logger.clone())
@@ -215,25 +153,19 @@ fn download(config: State<AppConfig>, headers: Headers, metadata: DownloadMetada
 }
 
 #[post("/upload?<metadata>", data = "<data>")]
-fn upload(config: State<AppConfig>, headers: Headers, metadata: UploadMetadata, data: Data, cont_type: &ContentType) -> Result<UploadResult, status::Custom<String>> {
-    #[allow(unused_must_use)] { config.statsd_client.count("requests.upload", 1); }
-
-    if !cont_type.is_form_data() {
-        return Err(Custom(
-            Status::BadRequest,
-            "Content-Type not multipart/form-data".into()
-        ));
-    }
-
-    let (_, boundary) = cont_type.params().find(|&(k, _)| k == "boundary").unwrap();
-
-    with_authentication(&config.logger, &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
+fn upload(config: State<AppConfig>, headers: Headers, metadata: UploadMetadata, data: Data, cont_type: &ContentType) -> HandlerResult<UploadResult> {
+    with_authentication(&config.logger, "upload", &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
         let uploaded_file_metadata = UploadedFile {
             name: String::from(metadata.file_name.clone()),
             device_id: String::from(device.id)
         };
 
-        // TODO return bad request for request errors
+        if !cont_type.is_form_data() {
+            return Ok(UploadResult::InvalidRequest("Content-Type not multipart/form-data".to_string()));
+        }
+
+        let (_, boundary) = cont_type.params().find(|&(k, _)| k == "boundary").unwrap();
+
         Repo::new(&config.repo_root, &device.account_id, device.repo_pass, config.logger.clone())
             .and_then(|repo| {
                 rbackup::save(&config.logger, config.statsd_client.clone(), &repo, &config.dao, uploaded_file_metadata, boundary, data)
@@ -242,10 +174,8 @@ fn upload(config: State<AppConfig>, headers: Headers, metadata: UploadMetadata, 
 }
 
 #[get("/remove/fileVersion?<metadata>")]
-fn remove_file_version(config: State<AppConfig>, headers: Headers, metadata: RemoveFileVersionMetadata) -> Result<RemoveFileVersionResult, status::Custom<String>> {
-    #[allow(unused_must_use)] { config.statsd_client.count("requests.remove_file_version", 1); }
-
-    with_authentication(&config.logger, &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
+fn remove_file_version(config: State<AppConfig>, headers: Headers, metadata: RemoveFileVersionMetadata) -> HandlerResult<RemoveFileVersionResult> {
+    with_authentication(&config.logger, "remove_file_version", &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
         Repo::new(&config.repo_root, &device.account_id, device.repo_pass, config.logger.clone())
             .and_then(|repo| {
                 rbackup::remove_file_version(&repo, &config.dao, metadata.file_version_id)
@@ -254,10 +184,8 @@ fn remove_file_version(config: State<AppConfig>, headers: Headers, metadata: Rem
 }
 
 #[get("/remove/file?<metadata>")]
-fn remove_file(config: State<AppConfig>, headers: Headers, metadata: RemoveFileMetadata) -> Result<RemoveFileResult, status::Custom<String>> {
-    #[allow(unused_must_use)] { config.statsd_client.count("requests.remove_file", 1); }
-
-    with_authentication(&config.logger, &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
+fn remove_file(config: State<AppConfig>, headers: Headers, metadata: RemoveFileMetadata) -> HandlerResult<RemoveFileResult> {
+    with_authentication(&config.logger, "remove_file", &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
         Repo::new(&config.repo_root, &device.account_id, device.repo_pass.clone(), config.logger.clone())
             .and_then(|repo| {
                 rbackup::remove_file(&config.logger, &repo, &config.dao, &device.id, &metadata.file_name)
@@ -265,27 +193,44 @@ fn remove_file(config: State<AppConfig>, headers: Headers, metadata: RemoveFileM
     })
 }
 
-fn with_authentication<'a, R: rocket::response::Responder<'a>, F2: FnOnce(DeviceIdentity) -> Result<R, Error>>(logger: &Logger, statsd_client: &StatsdClient, dao: &Dao, enc: &Encryptor, session_pass: &str, f2: F2) -> Result<R, status::Custom<String>> {
+fn with_authentication<'a, R: rocket::response::Responder<'a>, F2: FnOnce(DeviceIdentity) -> Result<R, Error>>(logger: &Logger, name: &str, statsd_client: &StatsdClient, dao: &Dao, enc: &Encryptor, session_id: &str, f2: F2) -> HandlerResult<R> {
     debug!(logger, "Authenticating request");
 
-    #[allow(unused_must_use)] { statsd_client.count("requests.total", 1); }
-
-    match rbackup::authenticate(dao, enc, session_pass) {
-        Ok(Some(identity)) => {
-            #[allow(unused_must_use)] { statsd_client.count("authentication.ok", 1); }
-            f2(identity.clone()).map_err(status_internal_server_error)
-        },
-        Ok(None) => {
-            #[allow(unused_must_use)] { statsd_client.count("authentication.not_found", 1); }
-            debug!(logger, "Unauthenticated request! SessionId: {}", session_pass);
-            Err(status::Custom(Status::Unauthorized, "Cannot find session".to_string()))
-        },
-        Err(e) => {
-            #[allow(unused_must_use)] { statsd_client.count("authentication.failure", 1); }
-            warn!(logger, "Error while authenticating: {}", e);
-            Err(status::Custom(Status::InternalServerError, format!("{}", e)))
+    with_metrics(statsd_client, name, || {
+        match rbackup::authenticate(dao, enc, session_id) {
+            Ok(Some(identity)) => {
+                #[allow(unused_must_use)] { statsd_client.count("authentication.ok", 1); }
+                f2(identity.clone()).map_err(status_internal_server_error)
+            },
+            Ok(None) => {
+                #[allow(unused_must_use)] { statsd_client.count("authentication.not_found", 1); }
+                debug!(logger, "Unauthenticated request! SessionId: {}", session_id);
+                Err(status::Custom(Status::Unauthorized, "Cannot find session".to_string()))
+            },
+            Err(e) => {
+                #[allow(unused_must_use)] { statsd_client.count("authentication.failure", 1); }
+                warn!(logger, "Error while authenticating: {}", e);
+                Err(status::Custom(Status::InternalServerError, format!("{}", e)))
+            }
         }
+    })
+}
+
+fn with_metrics<O, E, F: FnOnce() -> Result<O, E>>(statsd_client: &StatsdClient, name: &str, r: F) -> Result<O, E> {
+    #[allow(unused_must_use)] {
+        statsd_client.count("requests.total", 1);
+        statsd_client.count(format!("requests.{}.total", name).as_ref(), 1);
     }
+
+    let stopwatch = stopwatch::Stopwatch::start_new();
+
+    r().map(|res| {
+        #[allow(unused_must_use)] { statsd_client.time(format!("requests.{}.successes", name).as_ref(), stopwatch.elapsed_ms() as u64); }
+        res
+    }).map_err(|err| {
+        #[allow(unused_must_use)] { statsd_client.time(format!("requests.{}.failures", name).as_ref(), stopwatch.elapsed_ms() as u64); }
+        err
+    })
 }
 
 fn status_internal_server_error(e: Error) -> status::Custom<String> {

@@ -27,6 +27,7 @@ pub enum UploadedData {
 
 pub enum UploadResult {
     Success(File),
+    InvalidRequest(String),
     MismatchSha256
 }
 
@@ -95,6 +96,11 @@ impl<'r> Responder<'r> for UploadResult {
                 Response::build()
                     .status(Status::BadRequest)
                     .sized_body(Cursor::new("Mismatch SHA 256"))
+                    .ok(),
+            UploadResult::InvalidRequest(desc) =>
+                Response::build()
+                    .status(Status::BadRequest)
+                    .sized_body(Cursor::new(desc))
                     .ok()
         }
     }
