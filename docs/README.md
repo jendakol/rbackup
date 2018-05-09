@@ -1,3 +1,18 @@
-## Rbackup project
+# RBackup
+> Remote backup; Rust backup
 
-TBD
+## Motivation
+
+Having a small home server (NAS), I had been using an application for backing up all important data from home computers. When the service
+was announced to be about discontinued I've started to implement my own solution which is RBackup.
+
+## Key features
+
+1. Supports backup for multiple devices grouped in accounts // TBD - describe structure
+1. Supports files versioning
+1. Uses deduplication (block) (see [rdedup](https://github.com/dpc/rdedup))
+1. Communicates over HTTP (the client can be almost any HTTP client)
+1. Security - supports SSL, data encryption
+1. Doesn't need any special storage (works on top of filesystem)
+
+See the documentations for the [server](server.md) and the [Scala client](scala-client.md) for more information.

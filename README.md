@@ -4,8 +4,7 @@
 ## Motivation
 
 Having a small home server (NAS), I had been using an application for backing up all important data from home computers. When the service
-was announced to be about discontinued I've started to implement my own solution which is RBackup - the server and a
-[client](https://github.com/jendakol/rbackup-client).
+was announced to be about discontinued I've started to implement my own solution which is RBackup.
 
 I also used this application as a great project for learning quite new but powerful language called [Rust](https://www.rust-lang.org/).
 
@@ -18,12 +17,4 @@ I also used this application as a great project for learning quite new but power
 1. Security - supports SSL, data encryption
 1. Doesn't need any special storage (works on top of filesystem)
 
-## Configuration
-
-The configuration is split into multiple sections. Example config file is in [examples](examples/Settings.toml).
-
-// TBD
-
-## Endpoints
-
-// TBD
+See [RBackup docs](https://jendakol.github.io/rbackup) for more information.
