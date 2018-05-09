@@ -1,9 +1,11 @@
 #![feature(plugin, custom_derive)]
 #![plugin(rocket_codegen)]
 
+extern crate args;
 extern crate cadence;
 extern crate config;
 extern crate failure;
+extern crate getopts;
 extern crate mysql;
 extern crate pipe;
 extern crate rbackup;
@@ -14,12 +16,15 @@ extern crate serde_json;
 #[macro_use]
 extern crate slog;
 extern crate slog_async;
+extern crate slog_stream;
 extern crate slog_term;
 extern crate stopwatch;
 
+use args::{Args, ArgsError};
 use cadence::prelude::*;
 use cadence::StatsdClient;
 use failure::Error;
+use getopts::Occur;
 use rbackup::dao::Dao;
 use rbackup::encryptor::Encryptor;
 use rbackup::results::*;
@@ -33,6 +38,7 @@ use rocket::State;
 use slog::{Drain, Level, Logger};
 use slog_async::Async;
 use slog_term::{CompactFormat, TermDecorator};
+use std::process::exit;
 
 type HandlerResult<T> = Result<T, status::Custom<String>>;
 
@@ -98,7 +104,7 @@ impl<'a, 'r> FromRequest<'a, 'r> for Headers {
 }
 
 #[get("/account/register?<metadata>")]
-fn register(config: State<AppConfig>, metadata: RegisterMetadata) -> HandlerResult<RegisterResult> {
+fn register(config: State<HandlerConfig>, metadata: RegisterMetadata) -> HandlerResult<RegisterResult> {
     with_metrics(&config.statsd_client, "register", || {
         rbackup::register(&config.logger, &config.dao, &metadata.username, &metadata.password)
             .map_err(status_internal_server_error)
@@ -106,7 +112,7 @@ fn register(config: State<AppConfig>, metadata: RegisterMetadata) -> HandlerResu
 }
 
 #[get("/account/login?<metadata>")]
-fn login(config: State<AppConfig>, metadata: LoginMetadata) -> HandlerResult<LoginResult> {
+fn login(config: State<HandlerConfig>, metadata: LoginMetadata) -> HandlerResult<LoginResult> {
     with_metrics(&config.statsd_client, "login", || {
         rbackup::login(&config.dao, &config.encryptor, &metadata.device_id, &metadata.username, &metadata.password)
             .map_err(status_internal_server_error)
@@ -114,21 +120,21 @@ fn login(config: State<AppConfig>, metadata: LoginMetadata) -> HandlerResult<Log
 }
 
 #[get("/list/files?<metadata>")]
-fn list_files(config: State<AppConfig>, headers: Headers, metadata: ListFilesMetadata) -> HandlerResult<ListFileResult> {
+fn list_files(config: State<HandlerConfig>, headers: Headers, metadata: ListFilesMetadata) -> HandlerResult<ListFileResult> {
     with_authentication(&config.logger, "list_files", &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
         rbackup::list_files(&config.dao, &metadata.device_id.unwrap_or(device.id))
     })
 }
 
 #[get("/list/devices")]
-fn list_devices(config: State<AppConfig>, headers: Headers) -> HandlerResult<String> {
+fn list_devices(config: State<HandlerConfig>, headers: Headers) -> HandlerResult<String> {
     with_authentication(&config.logger, "list_devices", &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
         rbackup::list_devices(&config.dao, &device.account_id)
     })
 }
 
 #[get("/download?<metadata>")]
-fn download(config: State<AppConfig>, headers: Headers, metadata: DownloadMetadata) -> HandlerResult<Response> {
+fn download(config: State<HandlerConfig>, headers: Headers, metadata: DownloadMetadata) -> HandlerResult<Response> {
     with_authentication(&config.logger, "download", &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
         debug!(config.logger, "Opening repo");
 
@@ -153,7 +159,7 @@ fn download(config: State<AppConfig>, headers: Headers, metadata: DownloadMetada
 }
 
 #[post("/upload?<metadata>", data = "<data>")]
-fn upload(config: State<AppConfig>, headers: Headers, metadata: UploadMetadata, data: Data, cont_type: &ContentType) -> HandlerResult<UploadResult> {
+fn upload(config: State<HandlerConfig>, headers: Headers, metadata: UploadMetadata, data: Data, cont_type: &ContentType) -> HandlerResult<UploadResult> {
     with_authentication(&config.logger, "upload", &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
         let uploaded_file_metadata = UploadedFile {
             name: String::from(metadata.file_name.clone()),
@@ -174,7 +180,7 @@ fn upload(config: State<AppConfig>, headers: Headers, metadata: UploadMetadata, 
 }
 
 #[get("/remove/fileVersion?<metadata>")]
-fn remove_file_version(config: State<AppConfig>, headers: Headers, metadata: RemoveFileVersionMetadata) -> HandlerResult<RemoveFileVersionResult> {
+fn remove_file_version(config: State<HandlerConfig>, headers: Headers, metadata: RemoveFileVersionMetadata) -> HandlerResult<RemoveFileVersionResult> {
     with_authentication(&config.logger, "remove_file_version", &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
         Repo::new(&config.repo_root, &device.account_id, device.repo_pass, config.logger.clone())
             .and_then(|repo| {
@@ -184,7 +190,7 @@ fn remove_file_version(config: State<AppConfig>, headers: Headers, metadata: Rem
 }
 
 #[get("/remove/file?<metadata>")]
-fn remove_file(config: State<AppConfig>, headers: Headers, metadata: RemoveFileMetadata) -> HandlerResult<RemoveFileResult> {
+fn remove_file(config: State<HandlerConfig>, headers: Headers, metadata: RemoveFileMetadata) -> HandlerResult<RemoveFileResult> {
     with_authentication(&config.logger, "remove_file", &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
         Repo::new(&config.repo_root, &device.account_id, device.repo_pass.clone(), config.logger.clone())
             .and_then(|repo| {
@@ -237,7 +243,7 @@ fn status_internal_server_error(e: Error) -> status::Custom<String> {
     status::Custom(Status::InternalServerError, format!("{}", e))
 }
 
-struct AppConfig {
+struct HandlerConfig {
     repo_root: String,
     dao: Dao,
     encryptor: Encryptor,
@@ -245,34 +251,101 @@ struct AppConfig {
     statsd_client: StatsdClient
 }
 
+struct AppConfig {
+    settings_file: String,
+}
+
+fn get_app_config() -> Result<Option<AppConfig>, ArgsError> {
+    let mut args = Args::new("RBackup", "Deduplicating secure backup server");
+    args.flag("h", "help", "Print the usage menu");
+    args.option("c",
+                "config",
+                "Path to file (TOML format) with settings",
+                "PATH",
+                Occur::Optional,
+                None);
+
+    args.parse_from_cli()?;
+
+    let help = args.value_of("help")?;
+    if help {
+        println!("{}", args.full_usage());
+        return Ok(None);
+    }
+
+    Ok(
+        Some(AppConfig {
+            settings_file: args.value_of("config")?
+        })
+    )
+}
+
+fn load_config(path: &str) -> Result<config::Config, Error> {
+    let mut config = config::Config::default();
+    let content: String = {
+        use std::fs::File;
+        use std::io::prelude::*;
+        let mut file = File::open(path)
+            .map_err(|e| Error::from(rbackup::failures::CustomError::new(&format!("Could not open file {}: {}", path, e))))?;
+        let mut content = String::new();
+        file.read_to_string(&mut content)
+            .map_err(|e| Error::from(rbackup::failures::CustomError::new(&format!("Could not read from file {}: {}", path, e))))?;
+        content
+    };
+    config.merge(config::File::from_str(content.as_ref(), config::FileFormat::Toml))?;
+
+    Ok(config)
+}
+
+fn init_logger() -> Logger {
+    let decorator = TermDecorator::new().stderr().build();
+    let term = CompactFormat::new(decorator)
+        .use_local_timestamp()
+        .build()
+        .filter_level(Level::Info);
+    let async = Async::new(term.ignore_res())
+        .chan_size(2048)
+        .build();
+
+    Logger::root(async.ignore_res(), o!())
+}
+
 fn start_server(logger: Logger, config: config::Config, statsd_client: StatsdClient) -> () {
-    let repo_root = config.get_str("data_dir").expect("Could not access data dir");
+    let repo_root = config.get_str("general.data_dir").expect("Could not access data dir");
 
     // create DAO
 
     let dao = Dao::new(&format!("mysql://{}:{}@{}:{}",
-                                config.get_str("db_user").unwrap(),
-                                config.get_str("db_pass").unwrap(),
-                                config.get_str("db_host").unwrap(),
-                                config.get_str("db_port").unwrap()),
-                       &config.get_str("db_name").unwrap(),
+                                config.get_str("database.user").unwrap(),
+                                config.get_str("database.pass").unwrap(),
+                                config.get_str("database.host").unwrap(),
+                                config.get_str("database.port").unwrap()),
+                       &config.get_str("database.name").unwrap(),
                        statsd_client.clone()
     );
 
-    let secret = config.clone().get_str("secret").expect("There is no secret provided");
+    let secret = config.clone().get_str("general.secret").expect("There is no secret provided");
 
     // configure server:
 
     info!(logger, "Configuring server");
 
-//    let tls_config = config.get_table("tls").unwrap();
+    let config_builder = rocket::Config::build(rocket::config::Environment::Development)
+        .address(config.get_str("server.address").expect("There is no bind address provided"))
+        .port(config.get_int("server.port").expect("There is no bind port provided") as u16)
+        .workers(config.get_int("server.workers").expect("There is no workers count provided") as u16);
 
-    let rocket_config = rocket::Config::build(rocket::config::Environment::Development)
-        .address(config.get_str("address").expect("There is no bind address provided"))
-        .port(config.get_int("port").expect("There is no bind port provided") as u16)
-        .workers(config.get_int("workers").expect("There is no workers count provided") as u16)
-//        .tls(tls_config.get("certs").expect("There is no TLS cert path provided").to_string(),
-//             tls_config.get("key").expect("There is no TLS key path provided").to_string())
+    let config_builder = if config.get_bool("server.tls.enabled").unwrap_or(true) {
+        let tls_config = config.get_table("server.tls").unwrap();
+
+        config_builder
+            .tls(tls_config.get("certs").expect("There is no TLS cert path provided").to_string(),
+                 tls_config.get("key").expect("There is no TLS key path provided").to_string())
+    } else {
+        config_builder
+    };
+
+    let rocket_config = config_builder
         .log_level(rocket::logger::LoggingLevel::Critical)
         .unwrap();
 
@@ -285,7 +358,7 @@ fn start_server(logger: Logger, config: config::Config, statsd_client: StatsdCli
         .mount("/", routes![remove_file_version])
         .mount("/", routes![login])
         .mount("/", routes![register])
-        .manage(AppConfig {
+        .manage(HandlerConfig {
             repo_root,
             dao,
             encryptor: Encryptor::new(secret.clone()),
@@ -319,35 +392,31 @@ fn create_statsd_client(logger: Logger, host: &str, port: u16, prefix: &str) -> 
 }
 
 fn main() {
-    // This bit configures a logger
-    // The nice colored stderr logger
-    let decorator = TermDecorator::new().stderr().build();
-    let term = CompactFormat::new(decorator)
-        .use_local_timestamp()
-        .build()
-        .filter_level(Level::Info);
-    // Run it in a separate thread, both for performance and because the terminal one isn't Sync
-    let async = Async::new(term.ignore_res())
-        // Especially in test builds, we have quite large bursts of messages, so have more space to
-        // store them.
-        .chan_size(2048)
-        .build();
-    let logger = Logger::root(async.ignore_res(),
-                              o!("app" => format!("{}/{}",
-                                                  env!("CARGO_PKG_NAME"),
-                                                  env!("CARGO_PKG_VERSION"))));
+    let args = match get_app_config() {
+        Ok(Some(args)) => args,
+        Ok(None) => exit(0),
+        Err(e) => {
+            println!("{:?}", e);
+            exit(1);
+        }
+    };
 
-    let mut config = config::Config::default();
-    config.merge(config::File::with_name("Settings")).unwrap();
+    let logger = init_logger();
+
+    let config = load_config(&args.settings_file).unwrap_or_else(|e| {
+        println!("{}", e);
+        exit(1);
+    });
 
     let statsd_client = create_statsd_client(
         logger.clone(),
-        config.get_str("statsd_host").expect("").as_ref(),
-        config.get_int("statsd_port").expect("") as u16,
-        config.get_str("statsd_prefix").expect("").as_ref(),
-    ).unwrap();
-
-    // TODO commands
+        config.get_str("statsd.host").expect("").as_ref(),
+        config.get_int("statsd.port").expect("") as u16,
+        config.get_str("statsd.prefix").expect("").as_ref(),
+    ).unwrap_or_else(|e| {
+        println!("{}", e);
+        exit(1);
+    });
 
     start_server(logger, config, statsd_client)
 }

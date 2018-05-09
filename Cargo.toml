@@ -23,6 +23,7 @@ url = "*"
 slog = { version = "2.0.10", features = ["max_level_trace", "release_max_level_trace"]}
 slog-term = "2"
 slog-async = "2"
+slog-stream = "1.2.0"
 pipe = "0.0.3"
 mysql = { version = "~12.1", features = ["ssl"] }
 chrono = { version = "0.4", features = ["serde", "rustc-serialize"] }
@@ -35,3 +36,5 @@ stringreader = "0.1.1"
 cadence = "0.14.0"
 stopwatch = "0.0.7"
 multipart = "0.14.2"
+args = "2.2.0"
+getopts = "0.2.17"

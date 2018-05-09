@@ -46,7 +46,7 @@ use stopwatch::Stopwatch;
 use structs::*;
 
 pub mod dao;
-mod failures;
+pub mod failures;
 pub mod encryptor;
 pub mod structs;
 pub mod results;
