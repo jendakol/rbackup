@@ -1,0 +1,26 @@
+[general]
+data_dir = "/data/deduprepo"
+secret = "4aa7ffce9685bf1234707da5396503308dc1886d"
+
+[server]
+address = "localhost"
+port = 3369
+workers = 20
+tls = { enabled = true, certs = "fullchain.pem", key = "privkey.pem" }
+
+[maintenance]
+cron = "0 1/10 * * * *" # https://github.com/lholden/job_scheduler
+max_version_age_days = 5
+
+[database]
+host = "mysql.server.com"
+port = "3306"
+user = "rbackup"
+pass = "thePassword"
+name = "rbackup"
+
+[statsd]
+enabled = true
+host = "statsd.server.com"
+port = 8125
+prefix = "rbackup"
