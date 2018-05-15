@@ -27,12 +27,15 @@ pub struct Dao {
 }
 
 impl Dao {
-    pub fn new(connection_query: &str, db_name: &str, statsd_client: StatsdClient) -> Dao {
-        Dao {
-            pool: mysql::Pool::new(connection_query).unwrap(),
-            db_name: String::from(db_name),
-            statsd_client
-        }
+    pub fn new(connection_query: &str, db_name: &str, statsd_client: StatsdClient) -> Result<Dao, Error> {
+        mysql::Pool::new(connection_query)
+            .map(|pool| {
+                Dao {
+                    pool,
+                    db_name: String::from(db_name),
+                    statsd_client
+                }
+            }).map_err(Error::from)
     }
 
     fn report_timer(&self, name: &str, stopwatch: Stopwatch) -> () {
