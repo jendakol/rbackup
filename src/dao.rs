@@ -23,11 +23,11 @@ use uuid::Uuid;
 pub struct Dao {
     pool: mysql::Pool,
     db_name: String,
-    statsd_client: StatsdClient
+    statsd_client: Option<StatsdClient>
 }
 
 impl Dao {
-    pub fn new(connection_query: &str, db_name: &str, statsd_client: StatsdClient) -> Result<Dao, Error> {
+    pub fn new(connection_query: &str, db_name: &str, statsd_client: Option<StatsdClient>) -> Result<Dao, Error> {
         mysql::Pool::new(connection_query)
             .map(|pool| {
                 Dao {
@@ -40,8 +40,30 @@ impl Dao {
 
     fn report_timer(&self, name: &str, stopwatch: Stopwatch) -> () {
         #[allow(unused_must_use)] {
-            self.statsd_client.time(format!("dao.{}", name).as_ref(), stopwatch.elapsed_ms() as u64);
+            match self.statsd_client {
+                Some(ref cl) => {
+                    cl.time(format!("dao.{}", name).as_ref(), stopwatch.elapsed_ms() as u64);
+                },
+                None => () // ok
+            }
         }
+    }
+
+    pub fn exec(&self, query: &str) -> mysql::error::Result<()> {
+        let query = query.replace("DBNAME", &self.db_name);
+        let string = query.clone();
+
+        string.split(";").map(String::from).fold(Ok(()), |acc, q| {
+            acc.and_then(|_| {
+                let trimmed = q.trim();
+
+                if !trimmed.is_empty() {
+                    self.pool.prep_exec(trimmed, ()).map(|_| ())
+                } else {
+                    Ok(())
+                }
+            })
+        })
     }
 
     pub fn save_new_version(&self, uploaded_file: &UploadedFile, old_file: Option<File>, new_file_version: FileVersion) -> mysql::error::Result<File> {

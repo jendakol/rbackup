@@ -33,6 +33,7 @@ use slog_term::{CompactFormat, TermDecorator};
 use std::process::exit;
 
 mod server;
+mod commands;
 
 #[derive(Debug)]
 struct StatsdConfig {
@@ -48,7 +49,7 @@ struct GeneralConfig {
 }
 
 #[derive(Debug)]
-struct DatabaseConfig {
+pub struct DatabaseConfig {
     user: String,
     pass: String,
     host: String,
@@ -79,8 +80,8 @@ struct AppConfig {
 }
 
 #[derive(Debug)]
-enum AppCommand {
-    DbInit(String)
+pub enum AppCommand {
+    DbInit(DatabaseConfig)
 }
 
 fn exec_command(logger: &Logger, app_command: AppCommand) -> i32 {
@@ -89,8 +90,13 @@ fn exec_command(logger: &Logger, app_command: AppCommand) -> i32 {
     info!(logger, "Executing command: {:?}", app_command);
 
     match app_command {
-        DbInit(config_file) => {
-            unimplemented!() // TODO
+        DbInit(db_config) => {
+            init_dao(None, &db_config)
+                .and_then(|dao| commands::db_init(logger, dao))
+                .unwrap_or_else(|err| {
+                    error!(logger, "Error while executing the command: {}", err);
+                    1
+                })
         }
     }
 }
@@ -143,13 +149,12 @@ fn get_app_config(logger: &Logger) -> Result<Either<AppConfig, AppCommand>, Erro
 
     info!(logger, "Using config file: {}", config_file);
 
-    if let Some(_) = matches.subcommand_matches("dbinit") {
-        return Ok(Right(AppCommand::DbInit(config_file)))
-    };
-
-    // load config file:
-
     let config = load_config(&config_file)?;
+
+    if let Some(_) = matches.subcommand_matches("dbinit") {
+        return create_database_config(&config)
+            .map(|c| Right(AppCommand::DbInit(c)))
+    };
 
     // TODO check permissions to data_dir
 
@@ -181,16 +186,19 @@ fn get_app_config(logger: &Logger) -> Result<Either<AppConfig, AppCommand>, Erro
                     None
                 }
             },
-            database: DatabaseConfig {
-                user: config.get_str("database.user")?,
-                pass: config.get_str("database.pass")?,
-                host: config.get_str("database.host")?,
-                port: config.get_int("database.port")? as u16,
-                name: config.get_str("database.name")?,
-
-            }
+            database: create_database_config(&config)?
         }
     ))
+}
+
+fn create_database_config(config: &config::Config) -> Result<DatabaseConfig, Error> {
+    Ok(DatabaseConfig {
+        user: config.get_str("database.user")?,
+        pass: config.get_str("database.pass")?,
+        host: config.get_str("database.host")?,
+        port: config.get_int("database.port")? as u16,
+        name: config.get_str("database.name")?,
+    })
 }
 
 fn start_server(logger: Logger, config: AppConfig, dao: Dao, statsd_client: StatsdClient) -> () {
@@ -229,7 +237,7 @@ fn start_server(logger: Logger, config: AppConfig, dao: Dao, statsd_client: Stat
         .launch();
 }
 
-fn init_dao(statsd_client: StatsdClient, config: &DatabaseConfig) -> Result<Dao, Error> {
+fn init_dao(statsd_client: Option<StatsdClient>, config: &DatabaseConfig) -> Result<Dao, Error> {
     Dao::new(&format!("mysql://{}:{}@{}:{}",
                       config.user,
                       config.pass,
@@ -268,7 +276,16 @@ fn main() {
 
     let app_config = match get_app_config(&logger) {
         Ok(Left(app_config)) => app_config,
-        Ok(Right(command)) => exit(exec_command(&logger, command)),
+        Ok(Right(command)) => {
+            let code = exec_command(&logger, command);
+            // see https://docs.rs/slog-async/2.3.0/slog_async/#beware-of-stdprocessexit for explanation
+
+            use std::{thread, time};
+            let ten_millis = time::Duration::from_secs(1);
+            thread::sleep(ten_millis);
+
+            exit(code)
+        },
         Err(e) => {
             println!("Could not load app configuration: {:?}", e);
             exit(1);
@@ -283,7 +300,7 @@ fn main() {
             exit(1);
         });
 
-    let dao = init_dao(statsd_client.clone(), &app_config.database)
+    let dao = init_dao(Some(statsd_client.clone()), &app_config.database)
         .unwrap_or_else(|e| {
             println!("Could not initialize connection to DB: {}", e);
             exit(1);
