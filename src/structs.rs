@@ -1,11 +1,8 @@
-extern crate failure;
-extern crate mysql;
-extern crate slog;
-
 use failure::Error;
 use mysql::chrono::prelude::NaiveDateTime;
 use rdedup::Repo as RdedupRepo;
 use std;
+use slog;
 
 #[derive(Debug, PartialEq, Eq, Hash, Serialize)]
 pub struct File {

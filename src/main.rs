@@ -35,6 +35,14 @@ use std::process::exit;
 mod server;
 mod commands;
 
+struct NoOpSink;
+
+impl cadence::MetricSink for NoOpSink {
+    fn emit(&self, _metric: &str) -> std::io::Result<usize> {
+        Ok(0)
+    }
+}
+
 #[derive(Debug)]
 struct StatsdConfig {
     host: String,
@@ -74,7 +82,7 @@ struct ServerConfig {
 #[derive(Debug)]
 struct AppConfig {
     general: GeneralConfig,
-    statsd: StatsdConfig,
+    statsd: Option<StatsdConfig>,
     server: ServerConfig,
     database: DatabaseConfig
 }
@@ -164,10 +172,14 @@ fn get_app_config(logger: &Logger) -> Result<Either<AppConfig, AppCommand>, Erro
                 data_dir: config.get_str("general.data_dir")?,
                 secret: config.get_str("general.secret")?
             },
-            statsd: StatsdConfig {
-                host: config.get_str("statsd.host")?,
-                port: config.get_int("statsd.port")? as u16,
-                prefix: config.get_str("statsd.prefix")?
+            statsd: if config.get_bool("statsd.enabled")? {
+                Some(StatsdConfig {
+                    host: config.get_str("statsd.host")?,
+                    port: config.get_int("statsd.port")? as u16,
+                    prefix: config.get_str("statsd.prefix")?
+                })
+            } else {
+                None
             },
             server: ServerConfig {
                 address: config.get_str("server.address")?,
@@ -248,27 +260,36 @@ fn init_dao(statsd_client: Option<StatsdClient>, config: &DatabaseConfig) -> Res
     )
 }
 
-fn create_statsd_client(logger: Logger, config: &StatsdConfig) -> Result<StatsdClient, Error> {
-    use std::net::{UdpSocket, ToSocketAddrs};
-    use cadence::{QueuingMetricSink};
+fn create_statsd_client(logger: Logger, config: &Option<StatsdConfig>) -> Result<StatsdClient, Error> {
+    match config {
+        &Some(ref config) => {
+            use std::net::{UdpSocket, ToSocketAddrs};
+            use cadence::{QueuingMetricSink};
 
-    let socket = UdpSocket::bind("0.0.0.0:0")?;
-    socket.set_nonblocking(true)?;
+            let socket = UdpSocket::bind("0.0.0.0:0")?;
+            socket.set_nonblocking(true)?;
 
-    let host_and_port = format!("{}:{}", config.host, config.port).to_socket_addrs()?.next().unwrap();
+            let host_and_port = format!("{}:{}", config.host, config.port).to_socket_addrs()?.next().unwrap();
 
-    info!(logger, "Creating StatsD client reporting to {} with prefix '{}'", host_and_port, config.prefix);
+            info!(logger, "Creating StatsD client reporting to {} with prefix '{}'", host_and_port, config.prefix);
 
-    let udp_sink = cadence::UdpMetricSink::from(host_and_port, socket)?;
-    let queuing_sink = QueuingMetricSink::from(udp_sink);
+            let udp_sink = cadence::UdpMetricSink::from(host_and_port, socket)?;
+            let queuing_sink = QueuingMetricSink::from(udp_sink);
 
-    Ok(
-        StatsdClient::builder(&config.prefix, queuing_sink)
-            .with_error_handler(move |err| {
-                error!(logger.clone(), "Error while sending stats: {}", err);
-            })
-            .build()
-    )
+            Ok(
+                StatsdClient::builder(&config.prefix, queuing_sink)
+                    .with_error_handler(move |err| {
+                        error!(logger.clone(), "Error while sending stats: {}", err);
+                    })
+                    .build()
+            )
+        },
+        &None => {
+            Ok(StatsdClient::from_sink("", NoOpSink))
+        }
+    }
+
+
 }
 
 fn main() {
