@@ -7,7 +7,7 @@ use std::io::prelude::*;
 pub fn db_init(logger: &Logger, dao: Dao) -> Result<i32, Error> {
     debug!(logger, "Executing DB init");
 
-    let mut file = File::open("resources/db-scheme.sql")?;
+    let mut file = File::open("/resources/db-scheme.sql")?;
     let mut contents = String::new();
     file.read_to_string(&mut contents)?;
 

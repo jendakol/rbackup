@@ -231,6 +231,7 @@ fn start_server(logger: Logger, config: AppConfig, dao: Dao, statsd_client: Stat
         .unwrap();
 
     rocket::custom(rocket_config, true)
+        .mount("/", routes![status])
         .mount("/", routes![upload])
         .mount("/", routes![download])
         .mount("/", routes![list_files])

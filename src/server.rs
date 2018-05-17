@@ -80,6 +80,11 @@ impl<'a, 'r> FromRequest<'a, 'r> for Headers {
     }
 }
 
+#[get("/status")]
+fn status() -> status::Custom<String> {
+    status::Custom(Status::Ok, String::from("RBackup running"))
+}
+
 #[get("/account/register?<metadata>")]
 fn register(config: State<HandlerConfig>, metadata: RegisterMetadata) -> HandlerResult<RegisterResult> {
     with_metrics(&config.statsd_client, "register", || {
