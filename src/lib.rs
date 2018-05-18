@@ -67,12 +67,12 @@ impl DigestDataStream {
 
 impl Read for DigestDataStream {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, std::io::Error> {
-        let mut inner = self.inner.lock().unwrap(); // TODO unwrap
+        let mut inner = self.inner.lock().unwrap();
 
         inner.read(buf)
             .map(|s| {
                 inner.size_inc(s);
-                inner.hash_update(&buf[0..s]);
+                inner.hash_update(&buf[..s]);
                 (self.handle_upload_chunk)(s as u64);
                 s
             })
@@ -139,7 +139,7 @@ fn process_multipart_upload(logger: &Logger, statsd_client: StatsdClient, repo: 
     repo.repo.write(storage_name, stream, &encrypt_handle)?;
 
     let data = {
-        Arc::try_unwrap(data_inner).map_err(|_| Error::from(CustomError::new("Could not unlock the file_entry after reading")))?.into_inner()?
+        Arc::try_unwrap(data_inner).unwrap().into_inner()?
     };
 
     let hash_calculated: String = hex::encode(data.hasher.result());
