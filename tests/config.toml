@@ -1,0 +1,22 @@
+[general]
+data_dir = "/data/deduprepo"
+secret = "4aa7ffce9685bf9686707da5396503308dc1886d"
+
+[server]
+address = "0.0.0.0"
+port = 3369
+workers = 20
+tls = { enabled = false }
+
+[database]
+host = "database"
+port = "3306"
+user = "root"
+pass = "rbackup"
+name = "rbackup"
+
+[statsd]
+enabled = false
+host = "statsd.vps.jenda.eu"
+port = 8125
+prefix = "rbackup.dev"

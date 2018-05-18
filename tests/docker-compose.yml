@@ -1,0 +1,16 @@
+version: '2'
+
+services:
+  database:
+    image: mysql:5
+    environment:
+      MYSQL_ROOT_PASSWORD: rbackup
+      MYSQL_DATABASE: rbackup
+  tests:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      - database
+    ports:
+      - "3369:3369"

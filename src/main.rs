@@ -63,6 +63,7 @@ pub struct DatabaseConfig {
     host: String,
     port: u16,
     name: String,
+    prefer_socket: bool
 }
 
 #[derive(Debug)]
@@ -210,6 +211,7 @@ fn create_database_config(config: &config::Config) -> Result<DatabaseConfig, Err
         host: config.get_str("database.host")?,
         port: config.get_int("database.port")? as u16,
         name: config.get_str("database.name")?,
+        prefer_socket: config.get_bool("database.prefer_socket").unwrap_or(true),
     })
 }
 
@@ -251,11 +253,12 @@ fn start_server(logger: Logger, config: AppConfig, dao: Dao, statsd_client: Stat
 }
 
 fn init_dao(statsd_client: Option<StatsdClient>, config: &DatabaseConfig) -> Result<Dao, Error> {
-    Dao::new(&format!("mysql://{}:{}@{}:{}",
+    Dao::new(&format!("mysql://{}:{}@{}:{}?prefer_socket={}",
                       config.user,
                       config.pass,
                       config.host,
-                      config.port),
+                      config.port,
+                      config.prefer_socket),
              &config.name,
              statsd_client
     )
@@ -289,8 +292,6 @@ fn create_statsd_client(logger: Logger, config: &Option<StatsdConfig>) -> Result
             Ok(StatsdClient::from_sink("", NoOpSink))
         }
     }
-
-
 }
 
 fn main() {
