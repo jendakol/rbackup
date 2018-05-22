@@ -139,7 +139,7 @@ fn process_multipart_upload(logger: &Logger, statsd_client: StatsdClient, repo: 
     repo.repo.write(storage_name, stream, &encrypt_handle)?;
 
     let data = {
-        Arc::try_unwrap(data_inner).unwrap().into_inner()?
+        Arc::try_unwrap(data_inner).map_err(|_| Error::from(CustomError::new("Could not unlock the file_entry after reading")))?.into_inner()?
     };
 
     let hash_calculated: String = hex::encode(data.hasher.result());
