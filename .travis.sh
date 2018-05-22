@@ -15,8 +15,7 @@ function rbackup_test {
      && docker-compose up -d \
      && wait_for_service \
      && ./tests.sh \
-     && docker-compose down \
-     || docker-compose down
+     && docker-compose down
 }
 
 function rbackup_publish {
@@ -25,9 +24,11 @@ function rbackup_publish {
     docker push jendakol/rbackup:$TRAVIS_TAG
 }
 
-rbackup_test &&
-  if $(test ${TRAVIS_REPO_SLUG} == "jendakol/rbackup" && test ${TRAVIS_PULL_REQUEST} == "false" && test "$TRAVIS_TAG" != ""); then
-    rbackup_publish
-  else
-    exit 0 # skipping publish, it's regular build
-  fi
+sudo apt-get -qq update \
+    && sudo apt-get install -y jq && \
+    rbackup_test &&
+      if $(test ${TRAVIS_REPO_SLUG} == "jendakol/rbackup" && test ${TRAVIS_PULL_REQUEST} == "false" && test "$TRAVIS_TAG" != ""); then
+        rbackup_publish
+      else
+        exit 0 # skipping publish, it's regular build
+      fi
