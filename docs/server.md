@@ -2,7 +2,7 @@
 
 ## Configuration
 
-The configuration is split into multiple sections. Example config file is in [examples](../examples/Settings.toml).
+The configuration is split into multiple sections. Example config file is in [examples](https://github.com/jendakol/rbackup/blob/master/examples/Settings.toml).
 
 // TBD
 
@@ -119,7 +119,7 @@ following sections:
 1. `file` - raw file bytes
 1. `file-hash` - SHA256 hash of the file being sent (hex format)
 
-Speaking in terms of `curl`:
+Speaking in terms of `bash and curl`:
 ```bash
 sha=$(sha256sum "$file_name" | awk '{ print $1 }')
 
