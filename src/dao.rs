@@ -182,11 +182,11 @@ impl Dao {
             })
     }
 
-    pub fn get_storage_names(&self, device_id: &str, file_name: &str) -> mysql::error::Result<Vec<String>> {
+    pub fn get_storage_names(&self, device_id: &str, file_id: u32) -> mysql::error::Result<Vec<String>> {
         let stopwatch = Stopwatch::start_new();
 
-        self.pool.prep_exec(format!("select storage_name from {}.files_versions join {}.files on {}.files_versions.file_id={}.files.id where {}.files.original_name=:file_name and {}.files.device_id=:device_id", self.db_name, self.db_name, self.db_name, self.db_name, self.db_name, self.db_name),
-                            params! {"file_name" => file_name, "device_id" => device_id})
+        self.pool.prep_exec(format!("select storage_name from {}.files_versions join {}.files on {}.files_versions.file_id={}.files.id where {}.files.id=:file_id and {}.files.device_id=:device_id", self.db_name, self.db_name, self.db_name, self.db_name, self.db_name, self.db_name),
+                            params! {"file_id" => file_id, "device_id" => device_id})
             .map(|result| {
                 self.report_timer("get_storage_names", stopwatch);
 
@@ -238,7 +238,9 @@ impl Dao {
         })
     }
 
-    pub fn remove_file_version(&self, version_id: u32) -> mysql::error::Result<Option<String>> {
+    pub fn remove_file_version(&self, logger: &Logger, version_id: u32) -> mysql::error::Result<Option<String>> {
+        debug!(logger, "Deleting file version with ID '{}'", version_id);
+
         self.get_hash_and_storage_name(version_id)
             .and_then(|st| {
                 let stopwatch = Stopwatch::start_new();
@@ -255,17 +257,17 @@ impl Dao {
             })
     }
 
-    pub fn remove_file(&self, logger: &Logger, device_id: &str, file_name: &str) -> Result<Option<Vec<String>>, Error> {
-        debug!(logger, "Deleting file versions for file '{}' from device {}", file_name, device_id);
+    pub fn remove_file(&self, logger: &Logger, device_id: &str, file_id: u32) -> Result<Option<Vec<String>>, Error> {
+        debug!(logger, "Deleting file versions for file with ID '{}' from device {}", file_id, device_id);
 
-        self.get_storage_names(device_id, file_name)
+        self.get_storage_names(device_id, file_id)
             .map_err(Error::from)
             .and_then(|st| {
                 let stopwatch = Stopwatch::start_new();
 
                 if st.len() >= 1 {
-                    self.pool.prep_exec(format!("delete {}.files_versions from {}.files_versions join {}.files on {}.files_versions.file_id={}.files.id where {}.files.original_name=:file_name and {}.files.device_id=:device_id", self.db_name, self.db_name, self.db_name, self.db_name, self.db_name, self.db_name, self.db_name),
-                                        params! {"file_name" => file_name, "device_id" => device_id})
+                    self.pool.prep_exec(format!("delete {}.files_versions from {}.files_versions join {}.files on {}.files_versions.file_id={}.files.id where {}.files.id=:file_id and {}.files.device_id=:device_id", self.db_name, self.db_name, self.db_name, self.db_name, self.db_name, self.db_name, self.db_name),
+                                        params! {"file_id" => file_id, "device_id" => device_id})
                         .map_err(Error::from)
                         .and_then(|result| {
                             self.report_timer("remove_file", stopwatch);
@@ -281,7 +283,16 @@ impl Dao {
                 } else {
                     Ok(None)
                 }
-            }).map_err(Error::from)
+            }).and_then(|list| match list {
+            Some(versions) => {
+                // versions were deleted, now delete the file itself
+                self.pool.prep_exec(format!("delete from {}.files where {}.files.id=:file_id and {}.files.device_id=:device_id", self.db_name, self.db_name, self.db_name),
+                                    params! {"file_id" => file_id, "device_id" => device_id})
+                    .map_err(Error::from)
+                    .map(|_| Some(versions))
+            },
+            None => Ok(None)
+        }).map_err(Error::from)
     }
 
     pub fn get_devices(&self, account_id: &str) -> mysql::error::Result<Vec<String>> {

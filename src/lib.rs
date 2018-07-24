@@ -115,7 +115,10 @@ fn process_multipart_upload(logger: &Logger, statsd_client: StatsdClient, repo: 
     // read file:
 
     let file_entry: MultipartField<Multipart<DataStream>> = match multipart.read_entry() {
-        ReadEntryResult::Entry(entry) => entry,
+        ReadEntryResult::Entry(entry) => {
+            if entry.headers.name.as_ref() != "file" { return Err(Error::from(CustomError::new("'file' part is missing or is misplaced"))); }
+            entry
+        },
         ReadEntryResult::End(_) => return Err(Error::from(CustomError::new("'file' part is missing"))),
         ReadEntryResult::Error(_, err) => return Err(Error::from(err))
     };
@@ -149,7 +152,10 @@ fn process_multipart_upload(logger: &Logger, statsd_client: StatsdClient, repo: 
     let file_entry: MultipartField<Multipart<DataStream>> = data.file_entry;
 
     let mut file_entry = match file_entry.next_entry() {
-        ReadEntryResult::Entry(entry) => entry,
+        ReadEntryResult::Entry(entry) => {
+            if entry.headers.name.as_ref() != "file-hash" { return Err(Error::from(CustomError::new("'file-hash' part is missing or is misplaced"))); }
+            entry
+        }
         ReadEntryResult::End(_) => return Err(Error::from(CustomError::new("'file-hash' part is missing"))),
         ReadEntryResult::Error(_, err) => return Err(Error::from(err))
     };
@@ -271,15 +277,14 @@ pub fn list_files(dao: &Dao, device_id: &str) -> Result<ListFileResult, Error> {
         }).map_err(Error::from)
 }
 
-pub fn list_devices(dao: &Dao, account_id: &str) -> Result<String, Error> {
-    let res = dao.get_devices(account_id)?;
-
-    serde_json::to_string(&res)
+pub fn list_devices(dao: &Dao, account_id: &str) -> Result<ListDevicesResult, Error> {
+    dao.get_devices(account_id)
+        .map(ListDevicesResult::Success)
         .map_err(Error::from)
 }
 
-pub fn remove_file_version(repo: &Repo, dao: &Dao, version_id: u32) -> Result<RemoveFileVersionResult, Error> {
-    dao.remove_file_version(version_id)
+pub fn remove_file_version(logger: &Logger, repo: &Repo, dao: &Dao, version_id: u32) -> Result<RemoveFileVersionResult, Error> {
+    dao.remove_file_version(logger, version_id)
         .map_err(Error::from)
         .map(|opt| opt.map(|sn| repo.repo.rm(&sn).map_err(Error::from)))
         .and_then(|r| match r {
@@ -289,8 +294,8 @@ pub fn remove_file_version(repo: &Repo, dao: &Dao, version_id: u32) -> Result<Re
         })
 }
 
-pub fn remove_file(logger: &Logger, repo: &Repo, dao: &Dao, device_id: &str, file_name: &str) -> Result<RemoveFileResult, Error> {
-    dao.remove_file(logger, device_id, file_name)
+pub fn remove_file(logger: &Logger, repo: &Repo, dao: &Dao, device_id: &str, file_id: u32) -> Result<RemoveFileResult, Error> {
+    dao.remove_file(logger, device_id, file_id)
         .map(|opt| match opt {
             Some(storage_names) => {
                 let (_, failures): (Vec<_>, Vec<_>) = storage_names

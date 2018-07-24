@@ -36,6 +36,10 @@ pub enum ListFileResult {
     DeviceNotFound
 }
 
+pub enum ListDevicesResult {
+    Success(Vec<String>)
+}
+
 pub enum RemoveFileResult {
     Success,
     PartialFailure(Vec<IoError>),
@@ -154,6 +158,18 @@ impl<'r> Responder<'r> for ListFileResult {
                     .status(Status::NotFound)
                     .sized_body(Cursor::new("Device not found"))
                     .ok()
+        }
+    }
+}
+
+impl<'r> Responder<'r> for ListDevicesResult {
+    fn respond_to(self, req: &Request) -> Result<Response<'r>, Status> {
+        match self {
+            ListDevicesResult::Success(devices) =>
+                serde_json::to_string(&devices)
+                    .map_err(failure::Error::from)
+                    .map_err(status_internal_server_error)
+                    .respond_to(req),
         }
     }
 }

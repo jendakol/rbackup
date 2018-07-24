@@ -1,21 +1,21 @@
-use rbackup;
-use rocket;
-use stopwatch;
-use slog;
 use cadence::prelude::*;
 use cadence::StatsdClient;
 use failure::Error;
+use rbackup;
 use rbackup::dao::Dao;
 use rbackup::encryptor::Encryptor;
 use rbackup::results::*;
 use rbackup::structs::*;
+use rocket;
 use rocket::Data;
 use rocket::http::{ContentType, Status};
 use rocket::Outcome;
 use rocket::request::{self, FromRequest, Request};
 use rocket::response::{Response, status};
 use rocket::State;
+use slog;
 use slog::Logger;
+use stopwatch;
 
 type HandlerResult<T> = Result<T, status::Custom<String>>;
 
@@ -31,7 +31,7 @@ struct DownloadMetadata {
 
 #[derive(FromForm)]
 struct RemoveFileMetadata {
-    file_name: String,
+    file_id: u32,
 }
 
 #[derive(FromForm)]
@@ -109,7 +109,7 @@ fn list_files(config: State<HandlerConfig>, headers: Headers, metadata: ListFile
 }
 
 #[get("/list/devices")]
-fn list_devices(config: State<HandlerConfig>, headers: Headers) -> HandlerResult<String> {
+fn list_devices(config: State<HandlerConfig>, headers: Headers) -> HandlerResult<ListDevicesResult> {
     with_authentication(&config.logger, "list_devices", &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
         rbackup::list_devices(&config.dao, &device.account_id)
     })
@@ -161,22 +161,22 @@ fn upload(config: State<HandlerConfig>, headers: Headers, metadata: UploadMetada
     })
 }
 
-#[get("/remove/fileVersion?<metadata>")]
+#[delete("/remove/fileVersion?<metadata>")]
 fn remove_file_version(config: State<HandlerConfig>, headers: Headers, metadata: RemoveFileVersionMetadata) -> HandlerResult<RemoveFileVersionResult> {
     with_authentication(&config.logger, "remove_file_version", &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
         Repo::new(&config.repo_root, &device.account_id, device.repo_pass, config.logger.clone())
             .and_then(|repo| {
-                rbackup::remove_file_version(&repo, &config.dao, metadata.file_version_id)
+                rbackup::remove_file_version(&config.logger, &repo, &config.dao, metadata.file_version_id)
             })
     })
 }
 
-#[get("/remove/file?<metadata>")]
+#[delete("/remove/file?<metadata>")]
 fn remove_file(config: State<HandlerConfig>, headers: Headers, metadata: RemoveFileMetadata) -> HandlerResult<RemoveFileResult> {
     with_authentication(&config.logger, "remove_file", &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
         Repo::new(&config.repo_root, &device.account_id, device.repo_pass.clone(), config.logger.clone())
             .and_then(|repo| {
-                rbackup::remove_file(&config.logger, &repo, &config.dao, &device.id, &metadata.file_name)
+                rbackup::remove_file(&config.logger, &repo, &config.dao, &device.id, metadata.file_id)
             })
     })
 }
@@ -227,7 +227,7 @@ fn status_internal_server_error(e: Error) -> status::Custom<String> {
 
 pub struct HandlerConfig {
     pub repo_root: String,
-    pub  dao: Dao,
+    pub dao: Dao,
     pub encryptor: Encryptor,
     pub logger: slog::Logger,
     pub statsd_client: StatsdClient
