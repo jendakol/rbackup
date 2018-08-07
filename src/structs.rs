@@ -39,7 +39,7 @@ impl Repo {
 }
 
 pub struct UploadedFile {
-    pub name: String,
+    pub path: String,
     pub device_id: String,
 }
 

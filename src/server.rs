@@ -21,7 +21,7 @@ type HandlerResult<T> = Result<T, status::Custom<String>>;
 
 #[derive(FromForm)]
 struct UploadMetadata {
-    file_name: String,
+    file_path: String,
 }
 
 #[derive(FromForm)]
@@ -69,7 +69,7 @@ impl<'a, 'r> FromRequest<'a, 'r> for Headers {
 
         let values: Vec<_> = request.headers().get("RBackup-Session-Pass").collect();
         if values.len() != 1 {
-            return Outcome::Failure((Status::BadRequest, ()));
+            return Outcome::Failure((Status::Unauthorized, ()));
         }
 
         let session_pass = String::from(values[0]);
@@ -82,7 +82,7 @@ impl<'a, 'r> FromRequest<'a, 'r> for Headers {
 
 #[get("/status")]
 fn status() -> status::Custom<String> {
-    status::Custom(Status::Ok, String::from("RBackup running"))
+    status::Custom(Status::Ok, String::from("{\"status\": \"RBackup running\"}"))
 }
 
 #[get("/account/register?<metadata>")]
@@ -144,7 +144,7 @@ fn download(config: State<HandlerConfig>, headers: Headers, metadata: DownloadMe
 fn upload(config: State<HandlerConfig>, headers: Headers, metadata: UploadMetadata, data: Data, cont_type: &ContentType) -> HandlerResult<UploadResult> {
     with_authentication(&config.logger, "upload", &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
         let uploaded_file_metadata = UploadedFile {
-            name: String::from(metadata.file_name.clone()),
+            path: String::from(metadata.file_path.clone()),
             device_id: String::from(device.id)
         };
 

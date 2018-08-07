@@ -2,7 +2,7 @@ extern crate failure;
 extern crate rocket;
 extern crate serde_json;
 
-use rocket::http::Status;
+use rocket::http::{ContentType, Status};
 use rocket::request::Request;
 use rocket::response::{Responder, Response};
 use rocket::response::status::Custom as CustomStatus;
@@ -57,7 +57,8 @@ impl<'r> Responder<'r> for RegisterResult {
             RegisterResult::Created(account_id) =>
                 Response::build()
                     .status(Status::Created)
-                    .sized_body(Cursor::new(account_id))
+                    .sized_body(Cursor::new(format!("{{\"account_id\": \"{}\"}}", account_id)))
+                    .header(ContentType::JSON)
                     .ok(),
             RegisterResult::Exists =>
                 Response::build()
@@ -73,12 +74,14 @@ impl<'r> Responder<'r> for LoginResult {
             LoginResult::NewSession(session_id) =>
                 Response::build()
                     .status(Status::Created)
-                    .sized_body(Cursor::new(session_id))
+                    .sized_body(Cursor::new(format!("{{\"session_id\": \"{}\"}}", session_id)))
+                    .header(ContentType::JSON)
                     .ok(),
             LoginResult::ExistingSession(session_id) =>
                 Response::build()
                     .status(Status::Ok)
-                    .sized_body(Cursor::new(session_id))
+                    .sized_body(Cursor::new(format!("{{\"session_id\": \"{}\"}}", session_id)))
+                    .header(ContentType::JSON)
                     .ok(),
             LoginResult::AccountNotFound =>
                 Response::build()
@@ -95,10 +98,14 @@ impl<'r> Responder<'r> for UploadResult {
                 serde_json::to_string(&file)
                     .map_err(failure::Error::from)
                     .map_err(status_internal_server_error)
-                    .respond_to(req),
+                    .respond_to(req)
+                    .map(|mut resp| {
+                        resp.adjoin_header(ContentType::JSON);
+                        resp
+                    }),
             UploadResult::MismatchSha256 =>
                 Response::build()
-                    .status(Status::BadRequest)
+                    .status(Status::PreconditionFailed)
                     .sized_body(Cursor::new("Mismatch SHA 256"))
                     .ok(),
             UploadResult::InvalidRequest(desc) =>
@@ -152,7 +159,11 @@ impl<'r> Responder<'r> for ListFileResult {
                 serde_json::to_string(&files)
                     .map_err(failure::Error::from)
                     .map_err(status_internal_server_error)
-                    .respond_to(req),
+                    .respond_to(req)
+                    .map(|mut resp| {
+                        resp.adjoin_header(ContentType::JSON);
+                        resp
+                    }),
             ListFileResult::DeviceNotFound =>
                 Response::build()
                     .status(Status::NotFound)
@@ -169,7 +180,11 @@ impl<'r> Responder<'r> for ListDevicesResult {
                 serde_json::to_string(&devices)
                     .map_err(failure::Error::from)
                     .map_err(status_internal_server_error)
-                    .respond_to(req),
+                    .respond_to(req)
+                    .map(|mut resp| {
+                        resp.adjoin_header(ContentType::JSON);
+                        resp
+                    }),
         }
     }
 }

@@ -102,7 +102,7 @@ impl Dao {
                 let insert_file_result = self.pool.prep_exec(
                     format!("insert into {}.files (device_id, original_name) values (:device_id, :original_name)", self.db_name),
                     params! {"device_id" => &uploaded_file.device_id,
-                                   "original_name" => &uploaded_file.name
+                                   "original_name" => &uploaded_file.path
                                    })?;
 
                 self.report_timer("insert_file", stopwatch);
@@ -114,7 +114,7 @@ impl Dao {
                 let file = File {
                     id: file_id,
                     device_id: uploaded_file.device_id.clone(),
-                    original_name: uploaded_file.name.clone(),
+                    original_name: uploaded_file.path.clone(),
                     versions: Vec::new()
                 };
 
