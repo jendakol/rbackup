@@ -10,8 +10,6 @@ function upload() {
         -F file=@"${file_name}" -F file-hash="${sha}" \
         -X POST "http://localhost:3369/upload?file_path=config")
 
-echo $result
-
     if  [[ ${result} == Failure* ]];
     then
         echo ${result}
@@ -23,6 +21,8 @@ echo $result
         echo ${result}
         exit 1
     fi
+
+    echo ${result}
 }
 
 function list_files() {
@@ -41,6 +41,8 @@ function list_files() {
         echo ${result}
         exit 1
     fi
+
+    echo ${result}
 }
 
 function assert() {
@@ -48,7 +50,7 @@ function assert() {
     actual=$2
     hint=$3
 
-    test "${expected}" = "${actual}" || (echo "${hint}" && exit 1)
+    test "${expected}" = "${actual}" || (echo "${hint} (expected ${expected}, actual ${actual})" && exit 1)
 }
 
 echo -e "Running tests:\n"
@@ -56,8 +58,13 @@ echo -e "Running tests:\n"
 curl -sS "http://localhost:3369/account/register?username=rbackup&password=rbackup" > /dev/null \
  && session_id=$(curl -sS "http://localhost:3369/account/login?device_id=docker-tests&username=rbackup&password=rbackup" | jq '.session_id' | sed -e 's/^"//' -e 's/"$//') \
  && echo -e "SessionID: ${session_id} \n" \
- && upload ${session_id} config.toml \
- && second_response=$(upload ${session_id} config.toml) \
- && list_response_sha=$(list_files ${session_id} | jq '.[] | {original_name: .original_name, versions: [.versions[] | { version: .version, hash: .hash, size: .size }] }' | sha256sum | awk '{ print $1 }') \
- && assert "aae65f1df784e1ef2c9e12da0eaf78429044d32f1d5ed961d5e1ed4436bd9a89" ${list_response_sha} "List response content was different" \
+ && upload ${session_id} config.toml > /dev/null \
+ && upload ${session_id} config.toml > /dev/null \
+ && list_response=$(list_files ${session_id} | jq '.[] | {original_name: .original_name, versions: [.versions[] | { version: .version, hash: .hash, size: .size }] }') \
+ && echo ${list_response} \
+ && list_response_sha=$(echo ${list_response} | sha256sum | awk '{ print $1 }') \
+ && assert "e4051187f0b36c8a1a952f83c7d19e093abc7bf52241445419a213ef8e096e29" ${list_response_sha} "List response content was different" \
  && echo -e "\n\nTests were successful\n\n"
+
+# SHA256 of (with trailing \n): { "original_name": "config", "versions": [ { "version": 1, "hash": "d74643823048ffd090ecf342208d49253ec4b9f3acd5c47f6bb526e3fb67f544", "size": 354 }, { "version": 2, "hash": "d74643823048ffd090ecf342208d49253ec4b9f3acd5c47f6bb526e3fb67f544", "size": 354 }, { "version": 3, "hash": "d74643823048ffd090ecf342208d49253ec4b9f3acd5c47f6bb526e3fb67f544", "size": 354 }, { "version": 4, "hash": "d74643823048ffd090ecf342208d49253ec4b9f3acd5c47f6bb526e3fb67f544", "size": 354 } ] }
+
