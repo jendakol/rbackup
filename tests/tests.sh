@@ -42,7 +42,7 @@ function assert() {
 echo -e "Running tests:\n"
 
 curl -sS "http://localhost:3369/account/register?username=rbackup&password=rbackup" > /dev/null \
- && session_id=$(curl -sS "http://localhost:3369/account/login?device_id=docker-tests&username=rbackup&password=rbackup") \
+ && session_id=$(curl -sS "http://localhost:3369/account/login?device_id=docker-tests&username=rbackup&password=rbackup" | jq '.session_id') \
  && echo -e "SessionID: ${session_id} \n" \
  && upload ${session_id} config.toml \
  && second_response=$(upload ${session_id} config.toml) \
