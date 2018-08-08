@@ -8,9 +8,17 @@ function upload() {
 
     result=$(curl -sS --header "Content-Type: multipart/form-data" -H "RBackup-Session-Pass: ${session_id}" \
         -F file=@"${file_name}" -F file-hash="${sha}" \
-        -X POST "http://localhost:3369/upload?file_name=config")
+        -X POST "http://localhost:3369/upload?file_path=config")
+
+echo $result
 
     if  [[ ${result} == Failure* ]];
+    then
+        echo ${result}
+        exit 1
+    fi
+
+    if  [[ ${result} == Cannot* ]];
     then
         echo ${result}
         exit 1
@@ -22,9 +30,13 @@ function list_files() {
 
     result=$(curl -sS -H "RBackup-Session-Pass: ${session_id}" -X GET "http://localhost:3369/list/files/?")
 
-echo $result
-
     if  [[ ${result} == Failure* ]];
+    then
+        echo ${result}
+        exit 1
+    fi
+
+    if  [[ ${result} == Cannot* ]];
     then
         echo ${result}
         exit 1
@@ -42,7 +54,7 @@ function assert() {
 echo -e "Running tests:\n"
 
 curl -sS "http://localhost:3369/account/register?username=rbackup&password=rbackup" > /dev/null \
- && session_id=$(curl -sS "http://localhost:3369/account/login?device_id=docker-tests&username=rbackup&password=rbackup" | jq '.session_id') \
+ && session_id=$(curl -sS "http://localhost:3369/account/login?device_id=docker-tests&username=rbackup&password=rbackup" | jq '.session_id' | sed -e 's/^"//' -e 's/"$//') \
  && echo -e "SessionID: ${session_id} \n" \
  && upload ${session_id} config.toml \
  && second_response=$(upload ${session_id} config.toml) \
