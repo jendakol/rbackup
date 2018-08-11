@@ -166,10 +166,10 @@ impl Dao {
         })
     }
 
-    pub fn get_hash_and_storage_name(&self, version_id: u32) -> mysql::error::Result<Option<(String, String)>> {
+    pub fn get_hash_size_and_storage_name(&self, version_id: u32) -> mysql::error::Result<Option<(String, u64, String)>> {
         let stopwatch = Stopwatch::start_new();
 
-        self.pool.prep_exec(format!("select hash, storage_name from {}.files_versions where id=:version_id", self.db_name),
+        self.pool.prep_exec(format!("select hash, size, storage_name from {}.files_versions where id=:version_id", self.db_name),
                             params! {"version_id" => version_id})
             .map(|result| {
                 self.report_timer("get_storage_name", stopwatch);
@@ -241,7 +241,7 @@ impl Dao {
     pub fn remove_file_version(&self, logger: &Logger, version_id: u32) -> mysql::error::Result<Option<String>> {
         debug!(logger, "Deleting file version with ID '{}'", version_id);
 
-        self.get_hash_and_storage_name(version_id)
+        self.get_hash_size_and_storage_name(version_id)
             .and_then(|st| {
                 let stopwatch = Stopwatch::start_new();
 
@@ -251,7 +251,7 @@ impl Dao {
                         self.report_timer("remove_file_version", stopwatch);
 
                         if result.affected_rows() > 0 {
-                            st.map(|o| o.1)
+                            st.map(|o| o.2)
                         } else { None }
                     })
             })

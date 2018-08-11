@@ -124,9 +124,10 @@ fn download(config: State<HandlerConfig>, headers: Headers, metadata: DownloadMe
             .and_then(|repo| rbackup::load(config.logger.clone(), &repo, &config.dao, metadata.file_version_id))
             .and_then(|o| {
                 match o {
-                    Some((hash, read)) => {
+                    Some((hash, size, read)) => {
                         rocket::response::Response::build()
                             .raw_header("RBackup-File-Hash", hash)
+                            .raw_header("Content-Length", format!("{}", size))
                             .streamed_body(read)
                             .ok()
                     },

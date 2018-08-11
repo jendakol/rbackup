@@ -244,10 +244,10 @@ pub fn save(logger: &Logger, statsd_client: StatsdClient, repo: &Repo, dao: &Dao
         })
 }
 
-pub fn load(logger: Logger, repo: &Repo, dao: &Dao, version_id: u32) -> Result<Option<(String, Box<Read>)>, Error> {
-    dao.get_hash_and_storage_name(version_id)
+pub fn load(logger: Logger, repo: &Repo, dao: &Dao, version_id: u32) -> Result<Option<(String, u64, Box<Read>)>, Error> {
+    dao.get_hash_size_and_storage_name(version_id)
         .map(|n| {
-            n.map(|(hash, storage_name)| {
+            n.map(|(hash, size, storage_name)| {
                 use std::thread::spawn;
 
                 let (reader, writer) = pipe::pipe();
@@ -264,7 +264,7 @@ pub fn load(logger: Logger, repo: &Repo, dao: &Dao, version_id: u32) -> Result<O
                     ()
                 });
 
-                (hash, Box::from(reader) as Box<Read>)
+                (hash, size, Box::from(reader) as Box<Read>)
             })
         }).map_err(Error::from)
 }
