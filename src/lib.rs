@@ -269,8 +269,8 @@ pub fn load(logger: Logger, repo: &Repo, dao: &Dao, version_id: u32) -> Result<O
         }).map_err(Error::from)
 }
 
-pub fn list_files(dao: &Dao, device_id: &str) -> Result<ListFileResult, Error> {
-    dao.list_files(device_id)
+pub fn list_files(dao: &Dao, account_id: &str, device_id: &str) -> Result<ListFileResult, Error> {
+    dao.list_files(account_id, device_id)
         .map(|r| match r {
             Some(list) => ListFileResult::Success(list),
             None => ListFileResult::DeviceNotFound

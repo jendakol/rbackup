@@ -104,7 +104,7 @@ fn login(config: State<HandlerConfig>, metadata: LoginMetadata) -> HandlerResult
 #[get("/list/files?<metadata>")]
 fn list_files(config: State<HandlerConfig>, headers: Headers, metadata: ListFilesMetadata) -> HandlerResult<ListFileResult> {
     with_authentication(&config.logger, "list_files", &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
-        rbackup::list_files(&config.dao, &metadata.device_id.unwrap_or(device.id))
+        rbackup::list_files(&config.dao, &device.account_id, &metadata.device_id.unwrap_or(device.id))
     })
 }
 

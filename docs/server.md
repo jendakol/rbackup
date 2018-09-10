@@ -17,7 +17,7 @@ _session_id_ retrieved by `GET /account/login`.
 |--------|-------|--------|-----------|
 |GET `/status`|-|Status message|Health check|
 |GET `/account/register?<metadata>`|string username, string password|- HTTP 201 with body _account_id_<br/>- HTTP 409 if account already exists|Registration of new account on the server|
-|GET `/account/login?<metadata>`|string device_id, string username, string password|- HTTP 201 with body _session_id_ for new session<br/>- HTTP 200 with body _session_id_ for existing session<br/>- HTTP 401 if login was not successful|Login of session (connection of device to server)|
+|GET `/account/login?<metadata>`|string device_id, string username, string password|- HTTP 201 with body _session_id_ for new session<br/>- HTTP 200 with body _session_id_ for renewed session (this device already had a session, it was revoked and replaced by the new one, read more at [Session security](#session-security))<br/>- HTTP 401 if login was not successful|Login of session (connection of device to server)|
 |GET* `/list/files?<metadata>`|string device_id (optional)|- HTTP 200 with [file list](#file-list) in body<br/>- HTTP 404 if device was not found|List all files currently held on server (for whole account or just for one device, if specified)|
 |GET* `/list/devices`|-|- HTTP 200 with devices list in body (JSON array with strings)|List all devices of account related to the session|
 |GET* `/download?<metadata>`|int file_version_id|- HTTP 200 with `Content-Length` and `RBackup-File-Hash` headers and file bytes in body (chunked)<br/>- HTTP 404 if there is no such file available for download|Download file from server, providing it's version id|
@@ -127,3 +127,7 @@ curl -sS --header "Content-Type: multipart/form-data" -H "RBackup-Session-Pass: 
         -F file=@"${file_name}" -F file-hash="${sha}" \
         -X POST "${server}/upload?file_name=${file_name}"
 ```
+
+### Session security
+
+// TBD

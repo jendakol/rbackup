@@ -198,13 +198,13 @@ impl Dao {
             })
     }
 
-    pub fn list_files(&self, device_id: &str) -> mysql::error::Result<Option<Vec<File>>> {
+    pub fn list_files(&self, account_id: &str, device_id: &str) -> mysql::error::Result<Option<Vec<File>>> {
         let stopwatch = Stopwatch::start_new();
 
         self.pool.prep_exec(
             format!("select files.id, device_id, original_name, files_versions.id, size, hash, created, storage_name from {}.files join {}.files_versions on {}.files_versions.file_id = {}.files.id where device_id=:device_id",
                     self.db_name, self.db_name, self.db_name, self.db_name), params! { "device_id" => device_id}
-        ).map(|result| {
+        ).and_then(|result| {
             self.report_timer("list_files", stopwatch);
 
             let files: Vec<File> = result.map(|x| x.unwrap()).map(|row| {
@@ -231,9 +231,12 @@ impl Dao {
             }).collect();
 
             if files.len() >= 1 {
-                Some(files)
+                Ok(Some(files))
             } else {
-                None
+                // if no files were found, check if the device itself "is known"
+                self.is_known_device(account_id, device_id).map(|exists| {
+                    if exists { Some(Vec::new()) } else { None }
+                })
             }
         })
     }
@@ -306,6 +309,19 @@ impl Dao {
                     let device_id: String = mysql::from_row(row);
                     device_id
                 }).collect()
+            })
+    }
+
+    pub fn is_known_device(&self, account_id: &str, device_id: &str) -> mysql::error::Result<bool> {
+        let stopwatch = Stopwatch::start_new();
+
+        self.pool.prep_exec(format!("SELECT device_id from {}.sessions where account_id=:account_id and device_id=:device_id", self.db_name), params! {"account_id" => account_id, "device_id" => device_id})
+            .map(|result| {
+                self.report_timer("device_exists", stopwatch);
+
+                result.map(|x| x.unwrap()).map(|_| {
+                    true
+                }).into_iter().next().unwrap_or_else(|| false)
             })
     }
 
@@ -385,7 +401,7 @@ impl Dao {
                         self.report_timer("login", stopwatch);
 
                         match find_session_result {
-                            Some(_) => LoginResult::ExistingSession(new_session_id),
+                            Some(_) => LoginResult::RenewedSession(new_session_id), // TODO this is bullshit
                             None => LoginResult::NewSession(new_session_id)
                         }
                     })

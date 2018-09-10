@@ -16,7 +16,7 @@ pub enum RegisterResult {
 
 pub enum LoginResult {
     NewSession(String),
-    ExistingSession(String),
+    RenewedSession(String),
     AccountNotFound
 }
 
@@ -77,7 +77,7 @@ impl<'r> Responder<'r> for LoginResult {
                     .sized_body(Cursor::new(format!("{{\"session_id\": \"{}\"}}", session_id)))
                     .header(ContentType::JSON)
                     .ok(),
-            LoginResult::ExistingSession(session_id) =>
+            LoginResult::RenewedSession(session_id) =>
                 Response::build()
                     .status(Status::Ok)
                     .sized_body(Cursor::new(format!("{{\"session_id\": \"{}\"}}", session_id)))
