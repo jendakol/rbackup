@@ -334,7 +334,7 @@ impl Dao {
 
         let stopwatch = Stopwatch::start_new();
 
-        self.pool.prep_exec(format!("SELECT device_id, account_id, pass from {}.sessions where id=:id", self.db_name), params!("id" => hashed_pass))
+        self.pool.prep_exec(format!("SELECT device_id, account_id, pass from {}.sessions where id=:id", self.db_name), params!("id" => hashed_pass.clone()))
             .map(|result| {
                 self.report_timer("find_session", stopwatch);
 
@@ -352,7 +352,18 @@ impl Dao {
                         repo_pass: String::from_utf8(real_pass).expect("Could not convert repo pass to UTF-8")
                     }
                 }).into_iter().next()
-            })
+            }).and_then(|ident_opt| {
+            // if authentication was successful, update last_used field
+            match ident_opt {
+                Some(identity) => {
+                    self.pool.prep_exec(format!("update {}.sessions set last_used = CURRENT_TIMESTAMP where id=:id", self.db_name), params!("id" => hashed_pass))
+                        .map(|_| {
+                            Some(identity)
+                        })
+                },
+                None => Ok(None)
+            }
+        })
     }
 
     pub fn login(&self, enc: &Encryptor, device_id: &str, username: &str, pass: &str) -> Result<LoginResult, Error> {
