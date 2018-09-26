@@ -12,8 +12,8 @@ env_logger = "~0.4"
 text_io = "0.1.6"
 time = "0.1"
 config = "0.7"
-rocket = { version = "0.3.6", features = ["tls"] }
-rocket_codegen = "0.3.6"
+rocket = { version = "0.3.16", features = ["tls"] }
+rocket_codegen = "0.3.16"
 multimap = "0.4.0"
 serde = "~1"
 serde_derive = "~1"
