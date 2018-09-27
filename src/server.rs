@@ -4,7 +4,7 @@ use failure::Error;
 use rbackup;
 use rbackup::dao::Dao;
 use rbackup::encryptor::Encryptor;
-use rbackup::results::*;
+use rbackup::responses::*;
 use rbackup::structs::*;
 use rocket;
 use rocket::Data;
@@ -87,16 +87,20 @@ fn status() -> status::Custom<String> {
 
 #[get("/account/register?<metadata>")]
 fn register(config: State<HandlerConfig>, metadata: RegisterMetadata) -> HandlerResult<RegisterResult> {
+    debug!(config.logger, "Registering account '{}'", &metadata.username);
+
     with_metrics(&config.statsd_client, "register", || {
-        rbackup::register(&config.logger, &config.dao, &metadata.username, &metadata.password)
+        rbackup::register(&config.logger, &config.dao, &config.repo_root, &metadata.username, &metadata.password)
             .map_err(status_internal_server_error)
     })
 }
 
 #[get("/account/login?<metadata>")]
 fn login(config: State<HandlerConfig>, metadata: LoginMetadata) -> HandlerResult<LoginResult> {
+    debug!(config.logger, "Logging-in account '{}'", &metadata.username);
+
     with_metrics(&config.statsd_client, "login", || {
-        rbackup::login(&config.dao, &config.encryptor, &metadata.device_id, &metadata.username, &metadata.password)
+        rbackup::login(&config.logger, &config.dao, &config.encryptor, &metadata.device_id, &metadata.username, &metadata.password)
             .map_err(status_internal_server_error)
     })
 }
@@ -156,6 +160,10 @@ fn upload(config: State<HandlerConfig>, headers: Headers, metadata: UploadMetada
         let (_, boundary) = cont_type.params().find(|&(k, _)| k == "boundary").unwrap();
 
         Repo::new(&config.repo_root, &device.account_id, device.repo_pass, config.logger.clone())
+            .map_err(|e|{
+                debug!(&config.logger, "Error: {}", e);
+                e
+            })
             .and_then(|repo| {
                 rbackup::save(&config.logger, config.statsd_client.clone(), &repo, &config.dao, uploaded_file_metadata, boundary, data)
             })
@@ -183,12 +191,13 @@ fn remove_file(config: State<HandlerConfig>, headers: Headers, metadata: RemoveF
 }
 
 fn with_authentication<'a, R: rocket::response::Responder<'a>, F2: FnOnce(DeviceIdentity) -> Result<R, Error>>(logger: &Logger, name: &str, statsd_client: &StatsdClient, dao: &Dao, enc: &Encryptor, session_id: &str, f2: F2) -> HandlerResult<R> {
-    debug!(logger, "Authenticating request");
+    debug!(logger, "Authenticating '{}' request", name);
 
     with_metrics(statsd_client, name, || {
         match rbackup::authenticate(dao, enc, session_id) {
             Ok(Some(identity)) => {
                 #[allow(unused_must_use)] { statsd_client.count("authentication.ok", 1); }
+                debug!(logger, "Authenticated '{}' request", name);
                 f2(identity.clone()).map_err(status_internal_server_error)
             },
             Ok(None) => {

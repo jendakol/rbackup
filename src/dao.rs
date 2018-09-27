@@ -13,7 +13,7 @@ use encryptor::Encryptor;
 use failure::Error;
 use failures::CustomError;
 use hex;
-use results::*;
+use responses::*;
 use sha2::*;
 use slog::Logger;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -366,7 +366,7 @@ impl Dao {
         })
     }
 
-    pub fn login(&self, enc: &Encryptor, device_id: &str, username: &str, pass: &str) -> Result<LoginResult, Error> {
+    pub fn login(&self, logger: &Logger, enc: &Encryptor, device_id: &str, username: &str, pass: &str) -> Result<LoginResult, Error> {
         let hashed_pass: String = {
             let mut hasher = Sha256::new();
             hasher.input(pass.as_bytes());
@@ -412,8 +412,14 @@ impl Dao {
                         self.report_timer("login", stopwatch);
 
                         match find_session_result {
-                            Some(_) => LoginResult::RenewedSession(new_session_id), // TODO this is bullshit
-                            None => LoginResult::NewSession(new_session_id)
+                            Some(_) => {
+                                debug!(logger, "Renewed session: {}", &new_session_id);
+                                LoginResult::RenewedSession(new_session_id)
+                            }, // TODO this is bullshit
+                            None => {
+                                debug!(logger, "New session: {}", &new_session_id);
+                                LoginResult::NewSession(new_session_id)
+                            }
                         }
                     })
                     .map_err(Error::from)

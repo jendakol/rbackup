@@ -22,6 +22,7 @@ extern crate sha2;
 extern crate slog;
 extern crate stopwatch;
 extern crate time;
+extern crate url;
 extern crate uuid;
 
 use cadence::prelude::*;
@@ -33,7 +34,7 @@ use failure::Error;
 use failures::*;
 use multipart::server::{Multipart, MultipartField, ReadEntry, ReadEntryResult};
 use rdedup::Repo as RdedupRepo;
-use results::*;
+use responses::*;
 use rocket::data::Data;
 use rocket::data::DataStream;
 use sha2::{Digest, Sha256};
@@ -49,7 +50,7 @@ pub mod dao;
 pub mod failures;
 pub mod encryptor;
 pub mod structs;
-pub mod results;
+pub mod responses;
 
 struct DigestDataStream {
     inner: Arc<Mutex<DigestDataStreamInner>>,
@@ -180,12 +181,12 @@ fn process_multipart_upload(logger: &Logger, statsd_client: StatsdClient, repo: 
     }
 }
 
-pub fn register(logger: &Logger, dao: &Dao, username: &str, pass: &str) -> Result<RegisterResult, Error> {
+pub fn register(logger: &Logger, dao: &Dao, repo_root: &str, username: &str, pass: &str) -> Result<RegisterResult, Error> {
     dao.register(username, pass)
         .and_then(|r| match r {
             RegisterResult::Created(account_id) => {
                 info!(logger, "Registered new account with ID {}", account_id);
-                RdedupRepo::init(&std::path::Path::new(&format!("/data/deduprepo/{}", account_id)), &*Box::new(move || { Ok(String::from(pass)) }), rdedup::settings::Repo::new(), logger.clone())
+                RdedupRepo::init(&url::Url::parse(&format!("file://{}/{}", repo_root, account_id)).unwrap(), &*Box::new(move || { Ok(String::from(pass)) }), rdedup::settings::Repo::new(), logger.clone())
                     .map(|_| RegisterResult::Created(account_id))
                     .map_err(Error::from)
             },
@@ -193,8 +194,8 @@ pub fn register(logger: &Logger, dao: &Dao, username: &str, pass: &str) -> Resul
         })
 }
 
-pub fn login(dao: &Dao, enc: &Encryptor, device_id: &str, username: &str, pass: &str) -> Result<results::LoginResult, Error> {
-    dao.login(enc, device_id, username, pass)
+pub fn login(logger: &Logger, dao: &Dao, enc: &Encryptor, device_id: &str, username: &str, pass: &str) -> Result<responses::LoginResult, Error> {
+    dao.login(logger, enc, device_id, username, pass)
         .map_err(Error::from)
 }
 
@@ -206,6 +207,8 @@ pub fn authenticate(dao: &Dao, enc: &Encryptor, session_pass: &str) -> Result<Op
 pub fn save(logger: &Logger, statsd_client: StatsdClient, repo: &Repo, dao: &Dao, uploaded_file: UploadedFile, boundary: &str, data: Data) -> Result<UploadResult, Error> {
     let current_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)?;
+
+    debug!(logger, "Receiving file {:?}", &uploaded_file);
 
     let stopwatch = Stopwatch::start_new();
 
