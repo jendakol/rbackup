@@ -20,6 +20,7 @@ function rbackup_test {
 
 function rbackup_publish {
     docker tag rbackup jendakol/rbackup:$TRAVIS_TAG
+    mkdir ~/.docker
     echo -e {\"auths\": {\"https://index.docker.io/v1/\": {\"auth\": \"${AUTH_TOKEN}\"}},\"HttpHeaders\": {\"User-Agent\": \"Travis\"}} > ~/.docker/config.json
     docker push jendakol/rbackup:$TRAVIS_TAG
 }
