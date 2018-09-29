@@ -115,7 +115,7 @@ fn init_logger() -> Logger {
     let term = CompactFormat::new(decorator)
         .use_local_timestamp()
         .build()
-        .filter_level(Level::Debug);
+        .filter_level(Level::Info);
     let async = Async::new(term.ignore_res())
         .chan_size(2048)
         .build();

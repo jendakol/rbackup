@@ -221,7 +221,7 @@ pub fn save(logger: &Logger, statsd_client: StatsdClient, repo: &Repo, dao: &Dao
         .and_then(|uploaded| match uploaded {
             UploadedData::Success(size, hash) => {
                 let duration = stopwatch.elapsed_ms() as u64;
-                debug!(logger, "Uploaded file with size {} B, name '{}', declared hash {} in time {}", size, &uploaded_file.path, hex::encode(&hash), duration);
+                debug!(logger, "Uploaded file with size {} B, name '{}', declared hash {} in time {}", size, &uploaded_file.path, &hash, duration);
 
                 #[allow(unused_must_use)] {
                     statsd_client.time("upload.total.length", duration);
