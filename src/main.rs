@@ -66,6 +66,17 @@ pub struct DatabaseConfig {
     prefer_socket: bool
 }
 
+impl DatabaseConfig {
+    pub fn create_connection_query(&self) -> String {
+        format!("mysql://{}:{}@{}:{}?prefer_socket={}",
+                self.user,
+                self.pass,
+                self.host,
+                self.port,
+                self.prefer_socket)
+    }
+}
+
 #[derive(Debug)]
 struct TlsConfig {
     key: String,
@@ -253,12 +264,7 @@ fn start_server(logger: Logger, config: AppConfig, dao: Dao, statsd_client: Stat
 }
 
 fn init_dao(statsd_client: Option<StatsdClient>, config: &DatabaseConfig) -> Result<Dao, Error> {
-    Dao::new(&format!("mysql://{}:{}@{}:{}?prefer_socket={}",
-                      config.user,
-                      config.pass,
-                      config.host,
-                      config.port,
-                      config.prefer_socket),
+    Dao::new(&config.create_connection_query(),
              &config.name,
              statsd_client
     )
