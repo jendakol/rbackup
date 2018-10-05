@@ -6,6 +6,7 @@ extern crate serde_json;
 extern crate stopwatch;
 extern crate time;
 
+use cache_2q::Cache;
 use cadence::prelude::*;
 use cadence::StatsdClient;
 use dao::stopwatch::Stopwatch;
@@ -16,12 +17,14 @@ use hex;
 use responses::*;
 use sha2::*;
 use slog::Logger;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use structs::*;
 use uuid::Uuid;
 
 pub struct Dao {
     pool: mysql::Pool,
+    session_cache: Arc<Mutex<Cache<String, Option<DeviceIdentity>>>>,
     db_name: String,
     logger: Logger,
     statsd_client: Option<StatsdClient>
@@ -33,6 +36,7 @@ impl Dao {
             .map(|pool| {
                 Dao {
                     pool,
+                    session_cache: Arc::new(Mutex::new(Cache::new(100))),
                     db_name: String::from(db_name),
                     logger: logger.new(o!("component" => "dao")),
                     statsd_client
@@ -359,8 +363,8 @@ impl Dao {
             })
     }
 
-    pub fn authenticate(&self, enc: &Encryptor, session_pass: &str) -> mysql::error::Result<Option<DeviceIdentity>> {
-        let hashed_pass: String = {
+    fn find_session(&self, enc: &Encryptor, session_pass: &str) -> mysql::error::Result<Option<DeviceIdentity>> {
+        let hashed_session_pass: String = {
             let mut hasher = Sha256::new();
             hasher.input(session_pass.as_bytes());
             hex::encode(&hasher.result())
@@ -368,7 +372,7 @@ impl Dao {
 
         let stopwatch = Stopwatch::start_new();
 
-        self.pool.prep_exec(format!("SELECT device_id, account_id, pass from `{}`.sessions where id=:id", self.db_name), params!("id" => hashed_pass.clone()))
+        self.pool.prep_exec(format!("SELECT device_id, account_id, pass from `{}`.sessions where id=:id", self.db_name), params!("id" => hashed_session_pass.clone()))
             .map(|result| {
                 self.report_timer("find_session", stopwatch);
 
@@ -376,6 +380,8 @@ impl Dao {
                     let (device_id, account_id, pass) = mysql::from_row(row);
 
                     let pass: String = pass;
+                    debug!(self.logger, "Found session in DB"; "device_id" => &device_id, "pass" => &pass);
+
                     let pass = hex::decode(pass).expect("Could not convert hex to bytes");
 
                     let real_pass = enc.decrypt(&pass, session_pass.as_bytes()).expect("Could not decrypt repo pass");
@@ -386,18 +392,29 @@ impl Dao {
                         repo_pass: String::from_utf8(real_pass).expect("Could not convert repo pass to UTF-8")
                     }
                 }).into_iter().next()
-            }).and_then(|ident_opt| {
-            // if authentication was successful, update last_used field
-            match ident_opt {
-                Some(identity) => {
-                    self.pool.prep_exec(format!("update `{}`.sessions set last_used = CURRENT_TIMESTAMP where id=:id", self.db_name), params!("id" => hashed_pass))
-                        .map(|_| {
-                            Some(identity)
-                        })
-                },
-                None => Ok(None)
+            })
+    }
+
+    pub fn authenticate(&self, enc: &Encryptor, session_pass: &str) -> mysql::error::Result<Option<DeviceIdentity>> {
+        let stopwatch = Stopwatch::start_new();
+        let mut cache = self.session_cache.lock().unwrap();
+
+        Ok(
+            if !cache.contains_key(session_pass) {
+                debug!(self.logger, "Loading session from DB"; "session_pass" => session_pass);
+                let session = self.find_session(enc, session_pass)?;
+                debug!(self.logger, "Loaded session from DB, saving into cache"; "session_pass" => session_pass, "session" => ?session);
+                cache.insert(String::from(session_pass), session.clone());
+                self.report_timer("authenticate", stopwatch);
+                session
+            } else {
+                debug!(self.logger, "Loading session from cache"; "session_pass" => session_pass);
+                cache.get(session_pass).and_then(|s| {
+                    self.report_timer("authenticate", stopwatch);
+                    s.clone()
+                })
             }
-        })
+        )
     }
 
     pub fn login(&self, enc: &Encryptor, device_id: &str, username: &str, pass: &str) -> Result<LoginResult, Error> {

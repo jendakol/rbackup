@@ -1,5 +1,6 @@
 #[macro_use]
 extern crate arrayref;
+extern crate cache_2q;
 extern crate cadence;
 extern crate chrono;
 extern crate crypto;
@@ -165,7 +166,7 @@ fn process_multipart_upload(logger: &Logger, statsd_client: StatsdClient, repo: 
     file_entry.data.read_to_end(&mut hash_declared)?;
     let hash_declared: String = String::from_utf8(hash_declared)?;
 
-    debug!(logger, "Declared hash '{}', calculated '{}'", &hash_declared, &hash_calculated);
+    trace!(logger, "Declared hash '{}', calculated '{}'", &hash_declared, &hash_calculated);
 
     // check hash and return
 
@@ -221,7 +222,7 @@ pub fn save(logger: &Logger, statsd_client: StatsdClient, repo: &Repo, dao: &Dao
         .and_then(|uploaded| match uploaded {
             UploadedData::Success(size, hash) => {
                 let duration = stopwatch.elapsed_ms() as u64;
-                debug!(logger, "Uploaded file with size {} B, name '{}', declared hash {} in time {}", size, &uploaded_file.original_name, &hash, duration);
+                debug!(logger, "Uploaded file with size {} B, name '{}', declared hash {} in time {} ms", size, &uploaded_file.original_name, &hash, duration);
 
                 #[allow(unused_must_use)] {
                     statsd_client.time("upload.total.length", duration);
