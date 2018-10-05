@@ -29,7 +29,7 @@ use rbackup::encryptor::Encryptor;
 use server::*;
 use slog::{Drain, Level, Logger};
 use slog_async::Async;
-use slog_term::{CompactFormat, TermDecorator};
+use slog_term::{FullFormat, TermDecorator};
 use std::process::exit;
 
 mod server;
@@ -111,7 +111,7 @@ fn exec_command(logger: &Logger, app_command: AppCommand) -> i32 {
 
     match app_command {
         DbInit(db_config) => {
-            init_dao(None, &db_config)
+            init_dao(logger.clone(), None, &db_config)
                 .and_then(|dao| commands::db_init(logger, dao))
                 .unwrap_or_else(|err| {
                     error!(logger, "Error while executing the command: {}", err);
@@ -123,10 +123,10 @@ fn exec_command(logger: &Logger, app_command: AppCommand) -> i32 {
 
 fn init_logger() -> Logger {
     let decorator = TermDecorator::new().stderr().build();
-    let term = CompactFormat::new(decorator)
+    let term = FullFormat::new(decorator)
         .use_local_timestamp()
         .build()
-        .filter_level(Level::Info);
+        .filter_level(Level::Debug);
     let async = Async::new(term.ignore_res())
         .chan_size(2048)
         .build();
@@ -257,15 +257,16 @@ fn start_server(logger: Logger, config: AppConfig, dao: Dao, statsd_client: Stat
             repo_root: config.general.data_dir,
             dao,
             encryptor: Encryptor::new(config.general.secret),
-            logger,
+            logger: logger.new(o!("component" => "server")),
             statsd_client
         })
         .launch();
 }
 
-fn init_dao(statsd_client: Option<StatsdClient>, config: &DatabaseConfig) -> Result<Dao, Error> {
+fn init_dao(logger: Logger, statsd_client: Option<StatsdClient>, config: &DatabaseConfig) -> Result<Dao, Error> {
     Dao::new(&config.create_connection_query(),
              &config.name,
+             logger,
              statsd_client
     )
 }
@@ -329,7 +330,7 @@ fn main() {
             exit(1);
         });
 
-    let dao = init_dao(Some(statsd_client.clone()), &app_config.database)
+    let dao = init_dao(logger.clone(), Some(statsd_client.clone()), &app_config.database)
         .unwrap_or_else(|e| {
             println!("Could not initialize connection to DB: {}", e);
             exit(1);

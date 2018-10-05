@@ -194,8 +194,8 @@ pub fn register(logger: &Logger, dao: &Dao, repo_root: &str, username: &str, pas
         })
 }
 
-pub fn login(logger: &Logger, dao: &Dao, enc: &Encryptor, device_id: &str, username: &str, pass: &str) -> Result<responses::LoginResult, Error> {
-    dao.login(logger, enc, device_id, username, pass)
+pub fn login(dao: &Dao, enc: &Encryptor, device_id: &str, username: &str, pass: &str) -> Result<responses::LoginResult, Error> {
+    dao.login(enc, device_id, username, pass)
         .map_err(Error::from)
 }
 
@@ -237,7 +237,7 @@ pub fn save(logger: &Logger, statsd_client: StatsdClient, repo: &Repo, dao: &Dao
                     storage_name
                 };
 
-                dao.save_file_version(logger, &uploaded_file, new_version)
+                dao.save_file_version(&uploaded_file, new_version)
                     .map(UploadResult::Success)
                     .map_err(Error::from)
             },
@@ -284,8 +284,8 @@ pub fn list_devices(dao: &Dao, account_id: &str) -> Result<ListDevicesResult, Er
         .map_err(Error::from)
 }
 
-pub fn remove_file_version(logger: &Logger, repo: &Repo, dao: &Dao, version_id: u32) -> Result<RemoveFileVersionResult, Error> {
-    dao.remove_file_version(logger, version_id)
+pub fn remove_file_version(repo: &Repo, dao: &Dao, version_id: u32) -> Result<RemoveFileVersionResult, Error> {
+    dao.remove_file_version(version_id)
         .map_err(Error::from)
         .map(|opt| opt.map(|sn| repo.repo.rm(&sn).map_err(Error::from)))
         .and_then(|r| match r {
@@ -295,8 +295,8 @@ pub fn remove_file_version(logger: &Logger, repo: &Repo, dao: &Dao, version_id: 
         })
 }
 
-pub fn remove_file(logger: &Logger, repo: &Repo, dao: &Dao, device_id: &str, file_id: u32) -> Result<RemoveFileResult, Error> {
-    dao.remove_file(logger, device_id, file_id)
+pub fn remove_file(repo: &Repo, dao: &Dao, device_id: &str, file_id: u32) -> Result<RemoveFileResult, Error> {
+    dao.remove_file(device_id, file_id)
         .map(|opt| match opt {
             Some(storage_names) => {
                 let (_, failures): (Vec<_>, Vec<_>) = storage_names
@@ -326,6 +326,19 @@ fn to_storage_name(pc_id: &str, orig_file_name: &str, time_stamp: NaiveDateTime)
     hasher.input(&transform_u32_to_bytes(time_stamp.nanosecond()));
 
     hex::encode(&hasher.result())
+}
+
+pub fn to_uploaded_file(device_id: &str, original_name: &str) -> UploadedFile {
+    let mut hasher = Sha256::new();
+    hasher.input(device_id.as_bytes());
+    hasher.input(original_name.as_bytes());
+    let identity_hash = hex::encode(&hasher.result());
+
+    UploadedFile {
+        original_name: String::from(original_name),
+        device_id: String::from(device_id),
+        identity_hash
+    }
 }
 
 fn transform_u32_to_bytes(x: u32) -> [u8; 4] {

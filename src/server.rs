@@ -100,7 +100,7 @@ fn login(config: State<HandlerConfig>, metadata: LoginMetadata) -> HandlerResult
     debug!(config.logger, "Logging-in account '{}'", &metadata.username);
 
     with_metrics(&config.statsd_client, "login", || {
-        rbackup::login(&config.logger, &config.dao, &config.encryptor, &metadata.device_id, &metadata.username, &metadata.password)
+        rbackup::login(&config.dao, &config.encryptor, &metadata.device_id, &metadata.username, &metadata.password)
             .map_err(status_internal_server_error)
     })
 }
@@ -124,7 +124,7 @@ fn download(config: State<HandlerConfig>, headers: Headers, metadata: DownloadMe
     with_authentication(&config.logger, "download", &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
         debug!(config.logger, "Opening repo");
 
-        Repo::new(&config.repo_root, &device.account_id, device.repo_pass, config.logger.clone())
+        Repo::new(&config.repo_root, &device.account_id, device.repo_pass, &config.logger)
             .and_then(|repo| rbackup::load(config.logger.clone(), &repo, &config.dao, metadata.file_version_id))
             .and_then(|o| {
                 match o {
@@ -148,10 +148,7 @@ fn download(config: State<HandlerConfig>, headers: Headers, metadata: DownloadMe
 #[post("/upload?<metadata>", data = "<data>")]
 fn upload(config: State<HandlerConfig>, headers: Headers, metadata: UploadMetadata, data: Data, cont_type: &ContentType) -> HandlerResult<UploadResult> {
     with_authentication(&config.logger, "upload", &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
-        let uploaded_file_metadata = UploadedFile {
-            original_name: String::from(metadata.file_path.clone()),
-            device_id: String::from(device.id)
-        };
+        let uploaded_file_metadata = rbackup::to_uploaded_file(&device.id, &metadata.file_path);
 
         if !cont_type.is_form_data() {
             return Ok(UploadResult::InvalidRequest("Content-Type not multipart/form-data".to_string()));
@@ -159,8 +156,8 @@ fn upload(config: State<HandlerConfig>, headers: Headers, metadata: UploadMetada
 
         let (_, boundary) = cont_type.params().find(|&(k, _)| k == "boundary").unwrap();
 
-        Repo::new(&config.repo_root, &device.account_id, device.repo_pass, config.logger.clone())
-            .map_err(|e|{
+        Repo::new(&config.repo_root, &device.account_id, device.repo_pass, &config.logger)
+            .map_err(|e| {
                 debug!(&config.logger, "Error: {}", e);
                 e
             })
@@ -173,9 +170,9 @@ fn upload(config: State<HandlerConfig>, headers: Headers, metadata: UploadMetada
 #[delete("/remove/fileVersion?<metadata>")]
 fn remove_file_version(config: State<HandlerConfig>, headers: Headers, metadata: RemoveFileVersionMetadata) -> HandlerResult<RemoveFileVersionResult> {
     with_authentication(&config.logger, "remove_file_version", &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
-        Repo::new(&config.repo_root, &device.account_id, device.repo_pass, config.logger.clone())
+        Repo::new(&config.repo_root, &device.account_id, device.repo_pass, &config.logger)
             .and_then(|repo| {
-                rbackup::remove_file_version(&config.logger, &repo, &config.dao, metadata.file_version_id)
+                rbackup::remove_file_version(&repo, &config.dao, metadata.file_version_id)
             })
     })
 }
@@ -183,9 +180,9 @@ fn remove_file_version(config: State<HandlerConfig>, headers: Headers, metadata:
 #[delete("/remove/file?<metadata>")]
 fn remove_file(config: State<HandlerConfig>, headers: Headers, metadata: RemoveFileMetadata) -> HandlerResult<RemoveFileResult> {
     with_authentication(&config.logger, "remove_file", &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
-        Repo::new(&config.repo_root, &device.account_id, device.repo_pass.clone(), config.logger.clone())
+        Repo::new(&config.repo_root, &device.account_id, device.repo_pass.clone(), &config.logger)
             .and_then(|repo| {
-                rbackup::remove_file(&config.logger, &repo, &config.dao, &device.id, metadata.file_id)
+                rbackup::remove_file(&repo, &config.dao, &device.id, metadata.file_id)
             })
     })
 }

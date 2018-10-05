@@ -23,16 +23,18 @@ use uuid::Uuid;
 pub struct Dao {
     pool: mysql::Pool,
     db_name: String,
+    logger: Logger,
     statsd_client: Option<StatsdClient>
 }
 
 impl Dao {
-    pub fn new(connection_query: &str, db_name: &str, statsd_client: Option<StatsdClient>) -> Result<Dao, Error> {
+    pub fn new(connection_query: &str, db_name: &str, logger: Logger, statsd_client: Option<StatsdClient>) -> Result<Dao, Error> {
         mysql::Pool::new(connection_query)
             .map(|pool| {
                 Dao {
                     pool,
                     db_name: String::from(db_name),
+                    logger: logger.new(o!("component" => "dao")),
                     statsd_client
                 }
             }).map_err(Error::from)
@@ -42,7 +44,9 @@ impl Dao {
         #[allow(unused_must_use)] {
             match self.statsd_client {
                 Some(ref cl) => {
-                    cl.time(format!("dao.{}", name).as_ref(), stopwatch.elapsed_ms() as u64);
+                    let millis = stopwatch.elapsed_ms() as u64;
+                    debug!(self.logger, "Dao: '{}' took {} ms", name, millis);
+                    cl.time(format!("dao.{}", name).as_ref(), millis);
                 },
                 None => () // ok
             }
@@ -66,37 +70,35 @@ impl Dao {
         })
     }
 
-    fn get_or_insert_file(&self, logger: &Logger, uploaded_file: &UploadedFile) -> mysql::error::Result<File> {
+    fn get_or_insert_file(&self, uploaded_file: &UploadedFile) -> mysql::error::Result<File> {
         let stopwatch = Stopwatch::start_new();
 
-        debug!(logger, "Trying to create record for file {:?}", &uploaded_file);
-
-        let file_identity_hash = Dao::create_file_identity_hash(uploaded_file);
+        debug!(self.logger, "Trying to create record for file"; "file" => ?uploaded_file);
 
         let qr = self.pool.prep_exec(
             format!("insert ignore into `{}`.files (device_id, original_name, identity_hash) values (:device_id, :original_name, :identity_hash)", self.db_name),
             params! {"device_id" => &uploaded_file.device_id,
                                    "original_name" => &uploaded_file.original_name,
-                                   "identity_hash" => &file_identity_hash
+                                   "identity_hash" => &uploaded_file.identity_hash
                                    })?;
 
         self.report_timer("insert_file", stopwatch);
 
         if qr.affected_rows() > 0 {
-            debug!(logger, "File {:?} was inserted into DB", &uploaded_file)
+            debug!(self.logger, "File was inserted into DB"; "file" => ?uploaded_file)
         }
 
-        let file = self.find_file(logger, &uploaded_file.device_id, &uploaded_file.original_name)?.expect("Just inserted file was not found in DB");
+        let file = self.find_file(&uploaded_file.identity_hash)?.expect("Just inserted file was not found in DB");
 
-        debug!(logger, "File {:?} has ID {} in DB", &uploaded_file, file.id);
+        debug!(self.logger, "File has ID {} in DB", file.id; "file" => ?uploaded_file);
 
         // TODO what if now the flow fails - orphaned record in DB! is it a problem?
 
         Ok(file)
     }
 
-    pub fn save_file_version(&self, logger: &Logger, uploaded_file: &UploadedFile, new_file_version: FileVersion) -> mysql::error::Result<File> {
-        let file = self.get_or_insert_file(logger, uploaded_file)?;
+    pub fn save_file_version(&self, uploaded_file: &UploadedFile, new_file_version: FileVersion) -> mysql::error::Result<File> {
+        let file = self.get_or_insert_file(uploaded_file)?;
 
         let stopwatch = Stopwatch::start_new();
 
@@ -127,13 +129,15 @@ impl Dao {
         })
     }
 
-    pub fn find_file(&self, logger: &Logger, device_id: &str, orig_file_name: &str) -> mysql::error::Result<Option<File>> {
+    fn find_file(&self, identity_hash: &str) -> mysql::error::Result<Option<File>> {
+        debug!(self.logger, "Trying to locate file in DB"; "identity_hash" => identity_hash);
+
         let stopwatch = Stopwatch::start_new();
 
         let result = self.pool.prep_exec(
-            format!("select files.id, device_id, original_name, files_versions.id, size, hash, created, storage_name from `{}`.files join `{}`.files_versions on `{}`.files_versions.file_id = `{}`.files.id where device_id=:device_id and original_name=:original_name",
+            format!("select files.id, device_id, original_name, files_versions.id, size, hash, created, storage_name from `{}`.files join `{}`.files_versions on `{}`.files_versions.file_id = `{}`.files.id where identity_hash=:identity_hash",
                     self.db_name, self.db_name, self.db_name, self.db_name),
-            params! { "device_id" => device_id, "original_name" => orig_file_name}
+            params! { "identity_hash" => identity_hash}
         )?;
 
         self.report_timer("find_file", stopwatch);
@@ -170,14 +174,14 @@ impl Dao {
             None => {
                 // try fallback and find file even without any versions yet
 
-                debug!(logger, "Trying fallback - find file with no versions so far ('{}', '{}')", device_id, orig_file_name);
+                debug!(self.logger, "Trying fallback - find file with no versions so far"; "identity_hash" => identity_hash);
 
                 let stopwatch = Stopwatch::start_new();
 
                 self.pool.prep_exec(
-                    format!("select files.id, device_id, original_name from `{}`.files where device_id=:device_id and original_name=:original_name",
+                    format!("select files.id, device_id, original_name from `{}`.files where identity_hash=:identity_hash",
                             self.db_name),
-                    params! { "device_id" => device_id, "original_name" => orig_file_name}
+                    params! { "identity_hash" => identity_hash}
                 ).map(|result| {
                     self.report_timer("find_file", stopwatch);
 
@@ -271,8 +275,8 @@ impl Dao {
         })
     }
 
-    pub fn remove_file_version(&self, logger: &Logger, version_id: u32) -> mysql::error::Result<Option<String>> {
-        debug!(logger, "Deleting file version with ID '`{}`'", version_id);
+    pub fn remove_file_version(&self, version_id: u32) -> mysql::error::Result<Option<String>> {
+        debug!(self.logger, "Deleting file version with"; "id" => version_id);
 
         self.get_hash_size_and_storage_name(version_id)
             .and_then(|st| {
@@ -290,8 +294,8 @@ impl Dao {
             })
     }
 
-    pub fn remove_file(&self, logger: &Logger, device_id: &str, file_id: u32) -> Result<Option<Vec<String>>, Error> {
-        debug!(logger, "Deleting file versions for file with ID '`{}`' from device `{}`", file_id, device_id);
+    pub fn remove_file(&self, device_id: &str, file_id: u32) -> Result<Option<Vec<String>>, Error> {
+        debug!(self.logger, "Deleting file versions"; "file_id" => file_id, "device_id" => device_id);
 
         self.get_storage_names(device_id, file_id)
             .map_err(Error::from)
@@ -307,7 +311,7 @@ impl Dao {
 
                             let deleted = result.affected_rows();
 
-                            debug!(logger, "Deleted file versions: `{}`", deleted);
+                            debug!(self.logger, "Deleted file versions: `{}`", deleted);
 
                             if deleted == st.len() as u64 {
                                 Ok(Some(st))
@@ -396,7 +400,7 @@ impl Dao {
         })
     }
 
-    pub fn login(&self, logger: &Logger, enc: &Encryptor, device_id: &str, username: &str, pass: &str) -> Result<LoginResult, Error> {
+    pub fn login(&self, enc: &Encryptor, device_id: &str, username: &str, pass: &str) -> Result<LoginResult, Error> {
         let hashed_pass: String = {
             let mut hasher = Sha256::new();
             hasher.input(pass.as_bytes());
@@ -443,11 +447,11 @@ impl Dao {
 
                         match find_session_result {
                             Some(_) => {
-                                debug!(logger, "Renewed session: {}", &new_session_id);
+                                debug!(self.logger, "Renewed session: {}", &new_session_id);
                                 LoginResult::RenewedSession(new_session_id)
                             }, // TODO this is bullshit
                             None => {
-                                debug!(logger, "New session: {}", &new_session_id);
+                                debug!(self.logger, "New session: {}", &new_session_id);
                                 LoginResult::NewSession(new_session_id)
                             }
                         }
@@ -499,13 +503,6 @@ impl Dao {
         hasher.input(format!("{:?}", now).as_bytes());
         hasher.input(username.as_bytes());
         hasher.input(pass.as_bytes());
-        hex::encode(&hasher.result())
-    }
-
-    fn create_file_identity_hash(uploaded_file: &UploadedFile) -> String {
-        let mut hasher = Sha256::new();
-        hasher.input(uploaded_file.device_id.as_bytes());
-        hasher.input(uploaded_file.original_name.as_bytes());
         hex::encode(&hasher.result())
     }
 }

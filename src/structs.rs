@@ -3,6 +3,7 @@ use mysql::chrono::prelude::NaiveDateTime;
 use rdedup::Repo as RdedupRepo;
 use std;
 use slog;
+use slog::Logger;
 use url;
 
 #[derive(Debug, PartialEq, Eq, Hash, Serialize)]
@@ -28,7 +29,14 @@ pub struct Repo {
 }
 
 impl Repo {
-    pub fn new(root: &str, name: &str, pass: String, logger: slog::Logger) -> Result<Repo, Error> {
+    pub fn new(root: &str, name: &str, pass: String, _logger: &Logger) -> Result<Repo, Error> {
+
+        // TODO improve logging for rdedup_lib
+        let logger: Logger = Logger::root(
+            slog::Discard,
+            o!("component" => "rdedup")
+        );
+
         RdedupRepo::open(&url::Url::parse(&format!("file://{}/{}", root, name))?, logger)
             .map(|repo| {
                 Repo {
@@ -43,6 +51,7 @@ impl Repo {
 pub struct UploadedFile {
     pub original_name: String,
     pub device_id: String,
+    pub identity_hash: String,
 }
 
 #[derive(Debug, Clone)]
