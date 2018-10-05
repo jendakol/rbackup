@@ -66,104 +66,134 @@ impl Dao {
         })
     }
 
-    pub fn save_new_version(&self, uploaded_file: &UploadedFile, old_file: Option<File>, new_file_version: FileVersion) -> mysql::error::Result<File> {
+    fn get_or_insert_file(&self, logger: &Logger, uploaded_file: &UploadedFile) -> mysql::error::Result<File> {
         let stopwatch = Stopwatch::start_new();
 
-        match old_file {
-            Some(file) => {
-                let r = self.pool.prep_exec(
-                    format!("insert into `{}`.files_versions (file_id, created, size, hash, storage_name) values (:file_id, :created, :size, :hash, :storage_name)", self.db_name),
-                    params! {"file_id" => file.id,
+        debug!(logger, "Trying to create record for file {:?}", &uploaded_file);
+
+        let file_identity_hash = Dao::create_file_identity_hash(uploaded_file);
+
+        let qr = self.pool.prep_exec(
+            format!("insert ignore into `{}`.files (device_id, original_name, identity_hash) values (:device_id, :original_name, :identity_hash)", self.db_name),
+            params! {"device_id" => &uploaded_file.device_id,
+                                   "original_name" => &uploaded_file.original_name,
+                                   "identity_hash" => &file_identity_hash
+                                   })?;
+
+        self.report_timer("insert_file", stopwatch);
+
+        if qr.affected_rows() > 0 {
+            debug!(logger, "File {:?} was inserted into DB", &uploaded_file)
+        }
+
+        let file = self.find_file(logger, &uploaded_file.device_id, &uploaded_file.original_name)?.expect("Just inserted file was not found in DB");
+
+        debug!(logger, "File {:?} has ID {} in DB", &uploaded_file, file.id);
+
+        // TODO what if now the flow fails - orphaned record in DB! is it a problem?
+
+        Ok(file)
+    }
+
+    pub fn save_file_version(&self, logger: &Logger, uploaded_file: &UploadedFile, new_file_version: FileVersion) -> mysql::error::Result<File> {
+        let file = self.get_or_insert_file(logger, uploaded_file)?;
+
+        let stopwatch = Stopwatch::start_new();
+
+        let r = self.pool.prep_exec(
+            format!("insert into `{}`.files_versions (file_id, created, size, hash, storage_name) values (:file_id, :created, :size, :hash, :storage_name)", self.db_name),
+            params! {"file_id" => file.id,
                                    "created" => &new_file_version.created,
                                    "size" => &new_file_version.size,
                                    "hash" => &new_file_version.hash,
                                    "storage_name" => &new_file_version.storage_name
                                    })?;
 
-                self.report_timer("insert_file_version", stopwatch);
+        self.report_timer("insert_file_version", stopwatch);
 
-                let new_id = r.last_insert_id();
+        let new_id = r.last_insert_id();
 
-                let mut new_file_version = new_file_version.clone();
-                new_file_version.version = new_id;
+        let mut new_file_version = new_file_version.clone();
+        new_file_version.version = new_id;
 
-                let mut versions = file.versions;
-                versions.push(new_file_version);
+        let mut versions = file.versions;
+        versions.push(new_file_version);
 
-                Ok(File {
-                    id: file.id,
-                    device_id: file.device_id,
-                    original_name: file.original_name,
-                    versions
-                })
-            }
-            ,
-            None => {
-                let insert_file_result = self.pool.prep_exec(
-                    format!("insert into `{}`.files (device_id, original_name) values (:device_id, :original_name)", self.db_name),
-                    params! {"device_id" => &uploaded_file.device_id,
-                                   "original_name" => &uploaded_file.path
-                                   })?;
-
-                self.report_timer("insert_file", stopwatch);
-
-                // TODO what if now the flow fails - orphaned record in DB!
-
-                let file_id = insert_file_result.last_insert_id();
-
-                let file = File {
-                    id: file_id,
-                    device_id: uploaded_file.device_id.clone(),
-                    original_name: uploaded_file.path.clone(),
-                    versions: Vec::new()
-                };
-
-                // call recursively with filled-in old_file arg
-                self.save_new_version(uploaded_file, Some(file), new_file_version)
-            }
-        }
+        Ok(File {
+            id: file.id,
+            device_id: file.device_id,
+            original_name: file.original_name,
+            versions
+        })
     }
 
-    pub fn find_file(&self, device_id: &str, orig_file_name: &str) -> mysql::error::Result<Option<File>> {
+    pub fn find_file(&self, logger: &Logger, device_id: &str, orig_file_name: &str) -> mysql::error::Result<Option<File>> {
         let stopwatch = Stopwatch::start_new();
 
-        self.pool.prep_exec(
+        let result = self.pool.prep_exec(
             format!("select files.id, device_id, original_name, files_versions.id, size, hash, created, storage_name from `{}`.files join `{}`.files_versions on `{}`.files_versions.file_id = `{}`.files.id where device_id=:device_id and original_name=:original_name",
                     self.db_name, self.db_name, self.db_name, self.db_name),
             params! { "device_id" => device_id, "original_name" => orig_file_name}
-        ).map(|result| {
-            self.report_timer("find_file", stopwatch);
+        )?;
 
-            if result.more_results_exists() {
-                // TODO optimize
-                result.map(|x| x.unwrap()).map(|row| {
-                    let (id, device_id, original_name, versionid, size, hash, created, storage_name) = mysql::from_row(row);
+        self.report_timer("find_file", stopwatch);
 
-                    (
-                        (id, device_id, original_name),
-                        FileVersion {
-                            version: versionid,
-                            size,
-                            hash,
-                            created,
-                            storage_name
-                        }
-                    )
-                }).collect::<multimap::MultiMap<(u64, String, String), FileVersion>>()
-                    .into_iter()
-                    .next()
-                    .map(|((id, device_id, original_name), versions)| {
+        // TODO optimize
+        let file_with_versions = result.map(|x| x.unwrap()).map(|row| {
+            let (id, device_id, original_name, versionid, size, hash, created, storage_name) = mysql::from_row(row);
+
+            (
+                (id, device_id, original_name),
+                FileVersion {
+                    version: versionid,
+                    size,
+                    hash,
+                    created,
+                    storage_name
+                }
+            )
+        }).collect::<multimap::MultiMap<(u64, String, String), FileVersion>>()
+            .into_iter()
+            .next()
+            .map(|((id, device_id, original_name), versions)| {
+                File {
+                    id,
+                    device_id,
+                    original_name,
+                    versions
+                }
+            });
+
+
+        match file_with_versions {
+            Some(f) => Ok(Some(f)),
+            None => {
+                // try fallback and find file even without any versions yet
+
+                debug!(logger, "Trying fallback - find file with no versions so far ('{}', '{}')", device_id, orig_file_name);
+
+                let stopwatch = Stopwatch::start_new();
+
+                self.pool.prep_exec(
+                    format!("select files.id, device_id, original_name from `{}`.files where device_id=:device_id and original_name=:original_name",
+                            self.db_name),
+                    params! { "device_id" => device_id, "original_name" => orig_file_name}
+                ).map(|result| {
+                    self.report_timer("find_file", stopwatch);
+
+                    result.map(|x| x.unwrap()).map(|row| {
+                        let (id, device_id, original_name) = mysql::from_row(row);
+
                         File {
                             id,
                             device_id,
                             original_name,
-                            versions
+                            versions: Vec::new()
                         }
-                    })
-            } else {
-                None
+                    }).into_iter().next()
+                })
             }
-        })
+        }
     }
 
     pub fn get_hash_size_and_storage_name(&self, version_id: u32) -> mysql::error::Result<Option<(String, u64, String)>> {
@@ -469,6 +499,13 @@ impl Dao {
         hasher.input(format!("{:?}", now).as_bytes());
         hasher.input(username.as_bytes());
         hasher.input(pass.as_bytes());
+        hex::encode(&hasher.result())
+    }
+
+    fn create_file_identity_hash(uploaded_file: &UploadedFile) -> String {
+        let mut hasher = Sha256::new();
+        hasher.input(uploaded_file.device_id.as_bytes());
+        hasher.input(uploaded_file.original_name.as_bytes());
         hex::encode(&hasher.result())
     }
 }

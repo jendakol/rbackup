@@ -41,7 +41,7 @@ impl Repo {
 
 #[derive(Debug)]
 pub struct UploadedFile {
-    pub path: String,
+    pub original_name: String,
     pub device_id: String,
 }
 

@@ -213,7 +213,7 @@ pub fn save(logger: &Logger, statsd_client: StatsdClient, repo: &Repo, dao: &Dao
     let stopwatch = Stopwatch::start_new();
 
     let time_stamp = NaiveDateTime::from_timestamp(current_time.as_secs() as i64, current_time.subsec_nanos());
-    let storage_name = to_storage_name(&uploaded_file.device_id, &uploaded_file.path, time_stamp);
+    let storage_name = to_storage_name(&uploaded_file.device_id, &uploaded_file.original_name, time_stamp);
 
     debug!(logger, "Current time {}, final name {}", time_stamp, storage_name);
 
@@ -221,14 +221,12 @@ pub fn save(logger: &Logger, statsd_client: StatsdClient, repo: &Repo, dao: &Dao
         .and_then(|uploaded| match uploaded {
             UploadedData::Success(size, hash) => {
                 let duration = stopwatch.elapsed_ms() as u64;
-                debug!(logger, "Uploaded file with size {} B, name '{}', declared hash {} in time {}", size, &uploaded_file.path, &hash, duration);
+                debug!(logger, "Uploaded file with size {} B, name '{}', declared hash {} in time {}", size, &uploaded_file.original_name, &hash, duration);
 
                 #[allow(unused_must_use)] {
                     statsd_client.time("upload.total.length", duration);
                     statsd_client.time(format!("upload.devices.{}.length", uploaded_file.device_id).as_ref(), duration);
                 }
-
-                let old_file = dao.find_file(&uploaded_file.device_id, &uploaded_file.path)?;
 
                 // TODO check whether there is not already last version with the same hash
                 let new_version = FileVersion {
@@ -239,7 +237,7 @@ pub fn save(logger: &Logger, statsd_client: StatsdClient, repo: &Repo, dao: &Dao
                     storage_name
                 };
 
-                dao.save_new_version(&uploaded_file, old_file, new_version)
+                dao.save_file_version(logger, &uploaded_file, new_version)
                     .map(UploadResult::Success)
                     .map_err(Error::from)
             },

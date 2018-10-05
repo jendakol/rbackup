@@ -149,7 +149,7 @@ fn download(config: State<HandlerConfig>, headers: Headers, metadata: DownloadMe
 fn upload(config: State<HandlerConfig>, headers: Headers, metadata: UploadMetadata, data: Data, cont_type: &ContentType) -> HandlerResult<UploadResult> {
     with_authentication(&config.logger, "upload", &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
         let uploaded_file_metadata = UploadedFile {
-            path: String::from(metadata.file_path.clone()),
+            original_name: String::from(metadata.file_path.clone()),
             device_id: String::from(device.id)
         };
 
