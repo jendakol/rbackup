@@ -399,7 +399,7 @@ impl Dao {
         let stopwatch = Stopwatch::start_new();
         let mut cache = self.session_cache.lock().unwrap();
 
-        Ok(
+        let session = {
             if !cache.contains_key(session_pass) {
                 debug!(self.logger, "Loading session from DB"; "session_pass" => session_pass);
                 let session = self.find_session(enc, session_pass)?;
@@ -414,7 +414,31 @@ impl Dao {
                     s.clone()
                 })
             }
-        )
+        };
+
+        // TODO if authentication was successful, update last_used field
+//        match session {
+//            Some(identity) => {
+//                let session_pass: String = String::from(session_pass.clone());
+//
+//                std::thread::spawn(move || {
+//                    let hashed_session_pass: String = {
+//                        let mut hasher = Sha256::new();
+//                        hasher.input(session_pass.as_bytes());
+//                        hex::encode(&hasher.result())
+//                    };
+//
+//                    self.pool.prep_exec(format!("update `{}`.sessions set last_used = CURRENT_TIMESTAMP where id=:id", self.db_name), params!("id" => hashed_session_pass))
+//                        .map(|_| {
+//                            Some(identity)
+//                        })
+//                });
+//                ()
+//            },
+//            None => ()
+//        }
+
+        Ok(session)
     }
 
     pub fn login(&self, enc: &Encryptor, device_id: &str, username: &str, pass: &str) -> Result<LoginResult, Error> {
