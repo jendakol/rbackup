@@ -1,6 +1,7 @@
 [general]
 data_dir = "/data/deduprepo"
 secret = "4aa7ffce9685bf1234707da5396503308dc1886d"
+logging_level = "info"
 
 [server]
 address = "localhost"

@@ -31,6 +31,7 @@ use slog::{Drain, Level, Logger};
 use slog_async::Async;
 use slog_term::{FullFormat, TermDecorator};
 use std::process::exit;
+use std::str::FromStr;
 
 mod server;
 mod commands;
@@ -54,6 +55,7 @@ struct StatsdConfig {
 struct GeneralConfig {
     data_dir: String,
     secret: String,
+    logging_level: Level
 }
 
 #[derive(Debug)]
@@ -121,12 +123,12 @@ fn exec_command(logger: &Logger, app_command: AppCommand) -> i32 {
     }
 }
 
-fn init_logger() -> Logger {
+fn init_logger(level: Level) -> Logger {
     let decorator = TermDecorator::new().stderr().build();
     let term = FullFormat::new(decorator)
         .use_local_timestamp()
         .build()
-        .filter_level(Level::Debug);
+        .filter_level(level);
     let async = Async::new(term.ignore_res())
         .chan_size(2048)
         .build();
@@ -151,9 +153,9 @@ fn load_config(path: &str) -> Result<config::Config, Error> {
     Ok(config)
 }
 
-fn get_app_config(logger: &Logger) -> Result<Either<AppConfig, AppCommand>, Error> {
+fn get_app_config() -> Result<Either<AppConfig, (Level, AppCommand)>, Error> {
     let matches = App::new("RBackup")
-        .version("0.0.5") // TODO parametrize version
+        .version("0.1.0") // TODO parametrize version
         .about("Deduplicating secure backup server")
         .arg(Arg::with_name("config")
             .short("c")
@@ -167,13 +169,16 @@ fn get_app_config(logger: &Logger) -> Result<Either<AppConfig, AppCommand>, Erro
 
     let config_file = matches.value_of("config").unwrap_or("config.toml").to_string();
 
-    info!(logger, "Using config file: {}", config_file);
+    println!("Using config file: {}", config_file);
 
     let config = load_config(&config_file)?;
 
+    let logging_level = Level::from_str(&config.get_str("general.logging_level")?)
+        .expect("Wrong format of logging level; allowed 'debug', 'info', 'warn', 'error'");
+
     if let Some(_) = matches.subcommand_matches("dbinit") {
         return create_database_config(&config)
-            .map(|c| Right(AppCommand::DbInit(c)))
+            .map(|c| Right((logging_level.clone(), AppCommand::DbInit(c))))
     };
 
     // TODO check permissions to data_dir
@@ -182,7 +187,8 @@ fn get_app_config(logger: &Logger) -> Result<Either<AppConfig, AppCommand>, Erro
         AppConfig {
             general: GeneralConfig {
                 data_dir: config.get_str("general.data_dir")?,
-                secret: config.get_str("general.secret")?
+                secret: config.get_str("general.secret")?,
+                logging_level
             },
             statsd: if config.get_bool("statsd.enabled")? {
                 Some(StatsdConfig {
@@ -302,11 +308,10 @@ fn create_statsd_client(logger: Logger, config: &Option<StatsdConfig>) -> Result
 }
 
 fn main() {
-    let logger = init_logger();
-
-    let app_config = match get_app_config(&logger) {
+    let app_config = match get_app_config() {
         Ok(Left(app_config)) => app_config,
-        Ok(Right(command)) => {
+        Ok(Right((logging_level, command))) => {
+            let logger = init_logger(logging_level);
             let code = exec_command(&logger, command);
             // see https://docs.rs/slog-async/2.3.0/slog_async/#beware-of-stdprocessexit for explanation
 
@@ -321,6 +326,8 @@ fn main() {
             exit(1);
         }
     };
+
+    let logger = init_logger(app_config.general.logging_level);
 
     debug!(logger, "Running app with config: {:?}", app_config);
 
