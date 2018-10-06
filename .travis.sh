@@ -12,7 +12,7 @@ function wait_for_service() {
 function rbackup_test {
     docker build -t rbackup . \
      && cd tests \
-     && docker-compose up -d \
+     && docker-compose up -d --build \
      && wait_for_service \
      && ./tests.sh \
      && docker-compose down
