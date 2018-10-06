@@ -61,17 +61,20 @@ impl Dao {
         let query = query.replace("DBNAME", &self.db_name);
         let string = query.clone();
 
-        string.split(";").map(String::from).fold(Ok(()), |acc, q| {
-            acc.and_then(|_| {
-                let trimmed = q.trim();
+        self.pool.get_conn()
+            .and_then(|mut conn| {
+                string.split(";").map(String::from).fold(Ok(()), |acc, q| {
+                    acc.and_then(|_| {
+                        let trimmed = q.trim();
 
-                if !trimmed.is_empty() {
-                    self.pool.prep_exec(trimmed, ()).map(|_| ())
-                } else {
-                    Ok(())
-                }
+                        if !trimmed.is_empty() {
+                            conn.prep_exec(trimmed, ()).map(|_| ())
+                        } else {
+                            Ok(())
+                        }
+                    })
+                })
             })
-        })
     }
 
     fn get_or_insert_file(&self, uploaded_file: &UploadedFile) -> mysql::error::Result<File> {
