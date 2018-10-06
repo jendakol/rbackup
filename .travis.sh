@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 
 function wait_for_service() {
-    until curl "http://localhost:3369/status" 2> /dev/null > /dev/null ; do
+    n=0
+    until [ $n -ge 5 ]
+    do
       echo -e "Waiting for rbackup"
+      curl "http://localhost:3369/status" 2> /dev/null > /dev/null && break
+      n=$[$n+1]
       sleep 1
     done
 
@@ -10,9 +14,9 @@ function wait_for_service() {
 }
 
 function rbackup_test {
-    docker build -t rbackup . \
+     docker build -t rbackup . \
      && cd tests \
-     && docker-compose up -d --build \
+     && docker-compose up -d --build --force-recreate \
      && wait_for_service \
      && ./tests.sh \
      && docker-compose down
