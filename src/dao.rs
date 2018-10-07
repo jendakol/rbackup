@@ -83,11 +83,12 @@ impl Dao {
         debug!(self.logger, "Trying to create record for file"; "file" => ?uploaded_file);
 
         let qr = self.pool.prep_exec(
-            format!("insert ignore into `{}`.files (device_id, original_name, identity_hash) values (:device_id, :original_name, :identity_hash)", self.db_name),
+            format!("insert ignore into `{}`.files (account_id, device_id, original_name, identity_hash) values (:account_id, :device_id, :original_name, :identity_hash)", self.db_name),
             params! {"device_id" => &uploaded_file.device_id,
-                                   "original_name" => &uploaded_file.original_name,
-                                   "identity_hash" => &uploaded_file.identity_hash
-                                   })?;
+                            "account_id" => &uploaded_file.account_id,
+                            "original_name" => &uploaded_file.original_name,
+                            "identity_hash" => &uploaded_file.identity_hash
+        })?;
 
         self.report_timer("insert_file", stopwatch);
 
@@ -243,8 +244,8 @@ impl Dao {
         let stopwatch = Stopwatch::start_new();
 
         self.pool.prep_exec(
-            format!("select files.id, device_id, original_name, files_versions.id, size, hash, created, storage_name from `{}`.files join `{}`.files_versions on `{}`.files_versions.file_id = `{}`.files.id where device_id=:device_id",
-                    self.db_name, self.db_name, self.db_name, self.db_name), params! { "device_id" => device_id}
+            format!("select files.id, device_id, original_name, files_versions.id, size, hash, created, storage_name from `{}`.files join `{}`.files_versions on `{}`.files_versions.file_id = `{}`.files.id where account_id=:account_id and device_id=:device_id",
+                    self.db_name, self.db_name, self.db_name, self.db_name), params! { "device_id" => device_id, "account_id" => account_id}
         ).and_then(|result| {
             self.report_timer("list_files", stopwatch);
 

@@ -89,7 +89,7 @@ fn status() -> status::Custom<String> {
 fn register(config: State<HandlerConfig>, metadata: RegisterMetadata) -> HandlerResult<RegisterResult> {
     debug!(config.logger, "Registering account '{}'", &metadata.username);
 
-    with_metrics(&config.statsd_client, "register", || {
+    with_metrics(&config.logger, &config.statsd_client, "register", || {
         rbackup::register(&config.logger, &config.dao, &config.repo_root, &metadata.username, &metadata.password)
             .map_err(status_internal_server_error)
     })
@@ -97,16 +97,23 @@ fn register(config: State<HandlerConfig>, metadata: RegisterMetadata) -> Handler
 
 #[get("/account/login?<metadata>")]
 fn login(config: State<HandlerConfig>, metadata: LoginMetadata) -> HandlerResult<LoginResult> {
-    debug!(config.logger, "Logging-in account '{}'", &metadata.username);
+    info!(&config.logger, "Logging-in account '{}'", &metadata.username);
 
-    with_metrics(&config.statsd_client, "login", || {
+    with_metrics(&config.logger, &config.statsd_client, "login", || {
         rbackup::login(&config.dao, &config.encryptor, &metadata.device_id, &metadata.username, &metadata.password)
             .map_err(status_internal_server_error)
     })
 }
 
+#[get("/list/files")]
+fn list_files(config: State<HandlerConfig>, headers: Headers) -> HandlerResult<ListFileResult> {
+    with_authentication(&config.logger, "list_files", &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
+        rbackup::list_files(&config.dao, &device.account_id, &device.id)
+    })
+}
+
 #[get("/list/files?<metadata>")]
-fn list_files(config: State<HandlerConfig>, headers: Headers, metadata: ListFilesMetadata) -> HandlerResult<ListFileResult> {
+fn list_files_for_device(config: State<HandlerConfig>, headers: Headers, metadata: ListFilesMetadata) -> HandlerResult<ListFileResult> {
     with_authentication(&config.logger, "list_files", &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
         rbackup::list_files(&config.dao, &device.account_id, &metadata.device_id.unwrap_or(device.id))
     })
@@ -148,7 +155,7 @@ fn download(config: State<HandlerConfig>, headers: Headers, metadata: DownloadMe
 #[post("/upload?<metadata>", data = "<data>")]
 fn upload(config: State<HandlerConfig>, headers: Headers, metadata: UploadMetadata, data: Data, cont_type: &ContentType) -> HandlerResult<UploadResult> {
     with_authentication(&config.logger, "upload", &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
-        let uploaded_file_metadata = rbackup::to_uploaded_file(&device.id, &metadata.file_path);
+        let uploaded_file_metadata = rbackup::to_uploaded_file(&device.account_id, &device.id, &metadata.file_path);
 
         if !cont_type.is_form_data() {
             return Ok(UploadResult::InvalidRequest("Content-Type not multipart/form-data".to_string()));
@@ -190,7 +197,7 @@ fn remove_file(config: State<HandlerConfig>, headers: Headers, metadata: RemoveF
 fn with_authentication<'a, R: rocket::response::Responder<'a>, F2: FnOnce(DeviceIdentity) -> Result<R, Error>>(logger: &Logger, name: &str, statsd_client: &StatsdClient, dao: &Dao, enc: &Encryptor, session_id: &str, f2: F2) -> HandlerResult<R> {
     debug!(logger, "Authenticating '{}' request", name);
 
-    with_metrics(statsd_client, name, || {
+    with_metrics(logger, statsd_client, name, || {
         match rbackup::authenticate(dao, enc, session_id) {
             Ok(Some(identity)) => {
                 #[allow(unused_must_use)] { statsd_client.count("authentication.ok", 1); }
@@ -211,7 +218,7 @@ fn with_authentication<'a, R: rocket::response::Responder<'a>, F2: FnOnce(Device
     })
 }
 
-fn with_metrics<O, E, F: FnOnce() -> Result<O, E>>(statsd_client: &StatsdClient, name: &str, r: F) -> Result<O, E> {
+fn with_metrics<O, E, F: FnOnce() -> Result<O, E>>(logger: &Logger, statsd_client: &StatsdClient, name: &str, r: F) -> Result<O, E> {
     #[allow(unused_must_use)] {
         statsd_client.count("requests.total", 1);
         statsd_client.count(format!("requests.{}.total", name).as_ref(), 1);
@@ -220,10 +227,16 @@ fn with_metrics<O, E, F: FnOnce() -> Result<O, E>>(statsd_client: &StatsdClient,
     let stopwatch = stopwatch::Stopwatch::start_new();
 
     r().map(|res| {
-        #[allow(unused_must_use)] { statsd_client.time(format!("requests.{}.successes", name).as_ref(), stopwatch.elapsed_ms() as u64); }
+        #[allow(unused_must_use)] {
+            let millis = stopwatch.elapsed_ms() as u64;
+            debug!(logger, "Request '{}' took {} ms", name, &millis);
+            statsd_client.time(format!("requests.{}.successes", name).as_ref(), millis);
+        }
         res
     }).map_err(|err| {
-        #[allow(unused_must_use)] { statsd_client.time(format!("requests.{}.failures", name).as_ref(), stopwatch.elapsed_ms() as u64); }
+        let millis = stopwatch.elapsed_ms() as u64;
+        debug!(logger, "Request '{}' failed after {} ms", name, &millis);
+        #[allow(unused_must_use)] { statsd_client.time(format!("requests.{}.failures", name).as_ref(), millis); }
         err
     })
 }

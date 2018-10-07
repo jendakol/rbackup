@@ -28,7 +28,7 @@ function upload() {
 function list_files() {
     session_id=$1
 
-    result=$(curl -sS -H "RBackup-Session-Pass: ${session_id}" -X GET "http://localhost:3369/list/files/?")
+    result=$(curl -sS -H "RBackup-Session-Pass: ${session_id}" -X GET "http://localhost:3369/list/files")
 
     if  [[ ${result} == Failure* ]];
     then
@@ -64,6 +64,16 @@ curl -sS "http://localhost:3369/account/register?username=rbackup&password=rback
  && echo ${list_response} \
  && list_response_sha=$(echo ${list_response} | sha256sum | awk '{ print $1 }') \
  && assert "8dccd82e8e22115199801c700802456a6323c0a1e16927eeadddbbc79890584e" ${list_response_sha} "List response content was different" \
+ && echo -e "\nSecond account:\n" \
+ && curl -sS "http://localhost:3369/account/register?username=rbackup2&password=rbackup" > /dev/null \
+ && session_id2=$(curl -sS "http://localhost:3369/account/login?device_id=docker-tests&username=rbackup2&password=rbackup" | jq '.session_id' | sed -e 's/^"//' -e 's/"$//') \
+ && echo -e "SessionID2: ${session_id2} \n" \
+ && upload ${session_id2} "theFileToBeUploaded.dat" > /dev/null \
+ && list_response2=$(list_files ${session_id} | jq '.[] | {original_name: .original_name, versions: [.versions[] | { version: .version, hash: .hash, size: .size }] }') \
+ && echo ${list_response2} \
+ && list_response_sha2=$(echo ${list_response2} | sha256sum | awk '{ print $1 }') \
+ && assert "1ea40011b807d87d9de0e45560d35a68babc03c3a889da4c9bb77defec08f633" ${list_response_sha2} "List response content was different" \
  && echo -e "\n\nTests were successful\n\n"
 
 # SHA256 of (with trailing \n): { "original_name": "theFileToBeUploaded.dat", "versions": [ { "version": 1, "hash": "bc5ef071dd97166222168541bb53568b87e858b2db5614e120bc65fd6565f0af", "size": 1520 }, { "version": 2, "hash": "bc5ef071dd97166222168541bb53568b87e858b2db5614e120bc65fd6565f0af", "size": 1520 } ] }
+# SHA256 of (with trailing \n): { "original_name": "theFileToBeUploaded.dat", "versions": [ { "version": 3, "hash": "bc5ef071dd97166222168541bb53568b87e858b2db5614e120bc65fd6565f0af", "size": 1520 } ] }

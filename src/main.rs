@@ -234,7 +234,6 @@ fn create_database_config(config: &config::Config) -> Result<DatabaseConfig, Err
 
 fn start_server(logger: Logger, config: AppConfig, dao: Dao, statsd_client: StatsdClient) -> () {
     info!(logger, "Configuring server"; "address" => &config.server.address, "port" => &config.server.port, "workers" => &config.server.workers);
-    debug!(logger, "Server configuration: {:?}", &config);
 
     let config_builder = rocket::Config::build(rocket::config::Environment::Development)
         .address(config.server.address)
@@ -255,6 +254,7 @@ fn start_server(logger: Logger, config: AppConfig, dao: Dao, statsd_client: Stat
         .mount("/", routes![upload])
         .mount("/", routes![download])
         .mount("/", routes![list_files])
+        .mount("/", routes![list_files_for_device])
         .mount("/", routes![list_devices])
         .mount("/", routes![remove_file])
         .mount("/", routes![remove_file_version])
@@ -291,7 +291,7 @@ fn create_statsd_client(logger: Logger, config: &Option<StatsdConfig>) -> Result
 
             let host_and_port = format!("{}:{}", config.host, config.port).to_socket_addrs()?.next().unwrap();
 
-            info!(logger, "Creating StatsD client"; "endpoint" => &host_and_port, "prefix" => &config.prefix);
+            info!(logger, "Creating StatsD client"; "host" => &config.host, "port" => &config.port, "prefix" => &config.prefix);
 
             let udp_sink = cadence::UdpMetricSink::from(host_and_port, socket)?;
             let queuing_sink = QueuingMetricSink::from(udp_sink);

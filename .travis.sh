@@ -22,8 +22,8 @@ function wait_for_service() {
 }
 
 function rbackup_test {
-     docker build -t rbackup .  && \
-     cd tests  && \
+     docker build -t rbackup . && \
+     cd tests && \
      docker-compose up -d --build --force-recreate && \
      wait_for_service && \
      ./tests.sh && \

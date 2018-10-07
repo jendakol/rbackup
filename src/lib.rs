@@ -46,6 +46,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use stopwatch::Stopwatch;
 use structs::*;
+use std::time::Duration;
 
 pub mod dao;
 pub mod failures;
@@ -213,8 +214,9 @@ pub fn save(logger: &Logger, statsd_client: StatsdClient, repo: &Repo, dao: &Dao
 
     let stopwatch = Stopwatch::start_new();
 
-    let time_stamp = NaiveDateTime::from_timestamp(current_time.as_secs() as i64, current_time.subsec_nanos());
-    let storage_name = to_storage_name(&uploaded_file.device_id, &uploaded_file.original_name, time_stamp);
+    // round the timestamp to millis
+    let time_stamp = NaiveDateTime::from_timestamp(current_time.as_secs() as i64, current_time.subsec_nanos() / 1000000 * 1000000);
+    let storage_name = to_storage_name(&uploaded_file.device_id, &uploaded_file.original_name, current_time);
 
     debug!(logger, "Current time {}, final name {}", time_stamp, storage_name);
 
@@ -318,28 +320,43 @@ pub fn remove_file(repo: &Repo, dao: &Dao, device_id: &str, file_id: u32) -> Res
         })
 }
 
-fn to_storage_name(pc_id: &str, orig_file_name: &str, time_stamp: NaiveDateTime) -> String {
+fn to_storage_name(pc_id: &str, orig_file_name: &str, time_stamp: Duration) -> String {
     let mut hasher = Sha256::default();
 
     hasher.input(pc_id.as_bytes());
     hasher.input(orig_file_name.as_bytes());
-    hasher.input(&transform_u32_to_bytes(time_stamp.second()));
-    hasher.input(&transform_u32_to_bytes(time_stamp.nanosecond()));
+    hasher.input(&transform_u64_to_bytes(time_stamp.as_secs()));
+    hasher.input(&transform_u32_to_bytes(time_stamp.subsec_nanos()));
 
     hex::encode(&hasher.result())
 }
 
-pub fn to_uploaded_file(device_id: &str, original_name: &str) -> UploadedFile {
+pub fn to_uploaded_file(account_id: &str, device_id: &str, original_name: &str) -> UploadedFile {
     let mut hasher = Sha256::new();
+    hasher.input(account_id.as_bytes());
     hasher.input(device_id.as_bytes());
     hasher.input(original_name.as_bytes());
     let identity_hash = hex::encode(&hasher.result());
 
     UploadedFile {
         original_name: String::from(original_name),
+        account_id: String::from(account_id),
         device_id: String::from(device_id),
         identity_hash
     }
+}
+
+fn transform_u64_to_bytes(x: u64) -> [u8; 8] {
+    let b1: u8 = ((x >> 56) & 0xff) as u8;
+    let b2: u8 = ((x >> 48) & 0xff) as u8;
+    let b3: u8 = ((x >> 40) & 0xff) as u8;
+    let b4: u8 = ((x >> 32) & 0xff) as u8;
+    let b5: u8 = ((x >> 24) & 0xff) as u8;
+    let b6: u8 = ((x >> 16) & 0xff) as u8;
+    let b7: u8 = ((x >> 8) & 0xff) as u8;
+    let b8: u8 = (x & 0xff) as u8;
+
+    return [b1, b2, b3, b4, b5, b6, b7, b8]
 }
 
 fn transform_u32_to_bytes(x: u32) -> [u8; 4] {
