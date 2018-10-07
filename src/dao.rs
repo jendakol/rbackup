@@ -208,7 +208,7 @@ impl Dao {
         }
     }
 
-    pub fn get_hash_size_and_storage_name(&self, version_id: u32) -> mysql::error::Result<Option<(String, u64, String)>> {
+    pub fn get_hash_size_and_storage_name(&self, version_id: u64) -> mysql::error::Result<Option<(String, u64, String)>> {
         let stopwatch = Stopwatch::start_new();
 
         self.pool.prep_exec(format!("select hash, size, storage_name from `{}`.files_versions where id=:version_id", self.db_name),
@@ -224,7 +224,7 @@ impl Dao {
             })
     }
 
-    pub fn get_storage_names(&self, device_id: &str, file_id: u32) -> mysql::error::Result<Vec<String>> {
+    pub fn get_storage_names(&self, device_id: &str, file_id: u64) -> mysql::error::Result<Vec<String>> {
         let stopwatch = Stopwatch::start_new();
 
         self.pool.prep_exec(format!("select storage_name from `{}`.files_versions join `{}`.files on `{}`.files_versions.file_id=`{}`.files.id where `{}`.files.id=:file_id and `{}`.files.device_id=:device_id", self.db_name, self.db_name, self.db_name, self.db_name, self.db_name, self.db_name),
@@ -283,7 +283,7 @@ impl Dao {
         })
     }
 
-    pub fn remove_file_version(&self, version_id: u32) -> mysql::error::Result<Option<String>> {
+    pub fn remove_file_version(&self, version_id: u64) -> mysql::error::Result<Option<String>> {
         debug!(self.logger, "Deleting file version with"; "id" => version_id);
 
         self.get_hash_size_and_storage_name(version_id)
@@ -302,7 +302,7 @@ impl Dao {
             })
     }
 
-    pub fn remove_file(&self, device_id: &str, file_id: u32) -> Result<Option<Vec<String>>, Error> {
+    pub fn remove_file(&self, device_id: &str, file_id: u64) -> Result<Option<Vec<String>>, Error> {
         debug!(self.logger, "Deleting file versions"; "file_id" => file_id, "device_id" => device_id);
 
         self.get_storage_names(device_id, file_id)

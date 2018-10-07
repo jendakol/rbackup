@@ -248,7 +248,7 @@ pub fn save(logger: &Logger, statsd_client: StatsdClient, repo: &Repo, dao: &Dao
         })
 }
 
-pub fn load(logger: Logger, repo: &Repo, dao: &Dao, version_id: u32) -> Result<Option<(String, u64, Box<Read>)>, Error> {
+pub fn load(logger: Logger, repo: &Repo, dao: &Dao, version_id: u64) -> Result<Option<(String, u64, Box<Read>)>, Error> {
     dao.get_hash_size_and_storage_name(version_id)
         .map(|n| {
             n.map(|(hash, size, storage_name)| {
@@ -287,7 +287,7 @@ pub fn list_devices(dao: &Dao, account_id: &str) -> Result<ListDevicesResult, Er
         .map_err(Error::from)
 }
 
-pub fn remove_file_version(repo: &Repo, dao: &Dao, version_id: u32) -> Result<RemoveFileVersionResult, Error> {
+pub fn remove_file_version(repo: &Repo, dao: &Dao, version_id: u64) -> Result<RemoveFileVersionResult, Error> {
     dao.remove_file_version(version_id)
         .map_err(Error::from)
         .map(|opt| opt.map(|sn| repo.repo.rm(&sn).map_err(Error::from)))
@@ -298,7 +298,7 @@ pub fn remove_file_version(repo: &Repo, dao: &Dao, version_id: u32) -> Result<Re
         })
 }
 
-pub fn remove_file(repo: &Repo, dao: &Dao, device_id: &str, file_id: u32) -> Result<RemoveFileResult, Error> {
+pub fn remove_file(repo: &Repo, dao: &Dao, device_id: &str, file_id: u64) -> Result<RemoveFileResult, Error> {
     dao.remove_file(device_id, file_id)
         .map(|opt| match opt {
             Some(storage_names) => {

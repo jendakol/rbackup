@@ -26,12 +26,12 @@ struct UploadMetadata {
 
 #[derive(FromForm)]
 struct DownloadMetadata {
-    file_version_id: u32,
+    file_version_id: u64,
 }
 
 #[derive(FromForm)]
 struct RemoveFileMetadata {
-    file_id: u32,
+    file_id: u64,
 }
 
 #[derive(FromForm)]
@@ -41,7 +41,7 @@ struct ListFilesMetadata {
 
 #[derive(FromForm)]
 struct RemoveFileVersionMetadata {
-    file_version_id: u32,
+    file_version_id: u64,
 }
 
 #[derive(FromForm)]
