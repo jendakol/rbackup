@@ -1,12 +1,9 @@
-FROM debian:buster-slim
+FROM jendakol/rbackup-base:latest
 
 WORKDIR /tmp/rbackup
 COPY . .
 
-RUN apt-get update && apt-get install -y curl file sudo gcc libsodium-dev clang-6.0 pkg-config make libssl-dev liblzma-dev \
- && curl -f -L https://static.rust-lang.org/rustup.sh -O \
- && /bin/bash rustup.sh --channel=nightly --date=2018-09-26 \
- && cargo install \
+RUN cargo install --path . \
  && /bin/bash rustup.sh --channel=nightly --uninstall \
  && apt-get remove -y curl file gcc pkg-config make clang-6.0 \
  && apt-get autoremove -y \
