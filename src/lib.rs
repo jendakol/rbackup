@@ -298,11 +298,11 @@ pub fn remove_file_version(repo: &Repo, dao: &Dao, version_id: u64) -> Result<Re
         })
 }
 
-pub fn remove_file(repo: &Repo, dao: &Dao, device_id: &str, file_id: u64) -> Result<RemoveFileResult, Error> {
+pub fn remove_file(logger:&Logger, repo: &Repo, dao: &Dao, device_id: &str, file_id: u64) -> Result<RemoveFileResult, Error> {
     dao.remove_file(device_id, file_id)
         .map(|opt| match opt {
             Some(storage_names) => {
-                let (_, failures): (Vec<_>, Vec<_>) = storage_names
+                let (_, failures): (Vec<_>, Vec<_>) = (&storage_names)
                     .into_iter()
                     .map(|storage_name| {
                         repo.repo.rm(&storage_name)
@@ -313,6 +313,8 @@ pub fn remove_file(repo: &Repo, dao: &Dao, device_id: &str, file_id: u64) -> Res
                 if failures.is_empty() {
                     RemoveFileResult::Success
                 } else {
+                    warn!(logger, "Failures while removing files from repository: {:?}", failures; "all_files" => ?&storage_names);
+
                     RemoveFileResult::PartialFailure(failures)
                 }
             },

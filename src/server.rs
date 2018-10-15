@@ -189,7 +189,7 @@ fn remove_file(config: State<HandlerConfig>, headers: Headers, metadata: RemoveF
     with_authentication(&config.logger, "remove_file", &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
         Repo::new(&config.repo_root, &device.account_id, device.repo_pass.clone(), &config.logger)
             .and_then(|repo| {
-                rbackup::remove_file(&repo, &config.dao, &device.id, metadata.file_id)
+                rbackup::remove_file(&config.logger, &repo, &config.dao, &device.id, metadata.file_id)
             })
     })
 }
