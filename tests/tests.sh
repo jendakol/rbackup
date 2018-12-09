@@ -8,7 +8,7 @@ function upload() {
 
     result=$(curl -sS --header "Content-Type: multipart/form-data" -H "RBackup-Session-Pass: ${session_id}" \
         -F file=@"${file_name}" -F file-hash="${sha}" \
-        -X POST "http://localhost:3369/upload?file_path=theFileToBeUploaded.dat")
+        -X PUT "http://localhost:3369/upload?file_path=theFileToBeUploaded.dat&size=1520&mtime=123")
 
     if  [[ ${result} == Failure* ]];
     then
