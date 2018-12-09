@@ -22,6 +22,8 @@ type HandlerResult<T> = Result<T, status::Custom<String>>;
 #[derive(FromForm)]
 struct UploadMetadata {
     file_path: String,
+    size: u64,
+    mtime: u64,
 }
 
 #[derive(FromForm)]
@@ -152,10 +154,10 @@ fn download(config: State<HandlerConfig>, headers: Headers, metadata: DownloadMe
     })
 }
 
-#[post("/upload?<metadata>", data = "<data>")]
+#[put("/upload?<metadata>", data = "<data>")]
 fn upload(config: State<HandlerConfig>, headers: Headers, metadata: UploadMetadata, data: Data, cont_type: &ContentType) -> HandlerResult<UploadResult> {
     with_authentication(&config.logger, "upload", &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
-        let uploaded_file_metadata = rbackup::to_uploaded_file(&device.account_id, &device.id, &metadata.file_path);
+        let uploaded_file_metadata = rbackup::to_uploaded_file(&device.account_id, &device.id, &metadata.file_path, metadata.size, metadata.mtime);
 
         if !cont_type.is_form_data() {
             return Ok(UploadResult::InvalidRequest("Content-Type not multipart/form-data".to_string()));

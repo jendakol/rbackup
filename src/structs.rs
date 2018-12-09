@@ -50,6 +50,8 @@ impl Repo {
 #[derive(Debug)]
 pub struct UploadedFile {
     pub original_name: String,
+    pub size: u64,
+    pub mtime: NaiveDateTime,
     pub account_id: String,
     pub device_id: String,
     pub identity_hash: String,

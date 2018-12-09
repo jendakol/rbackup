@@ -236,7 +236,7 @@ pub fn save(logger: &Logger, statsd_client: StatsdClient, repo: &Repo, dao: &Dao
                     version: 0, // cannot know now, will be filled in after DB insertion
                     size,
                     hash,
-                    created: time_stamp,
+                    created: uploaded_file.mtime,
                     storage_name
                 };
 
@@ -333,7 +333,7 @@ fn to_storage_name(pc_id: &str, orig_file_name: &str, time_stamp: Duration) -> S
     hex::encode(&hasher.result())
 }
 
-pub fn to_uploaded_file(account_id: &str, device_id: &str, original_name: &str) -> UploadedFile {
+pub fn to_uploaded_file(account_id: &str, device_id: &str, original_name: &str, size: u64, mtime: u64) -> UploadedFile {
     let mut hasher = Sha256::new();
     hasher.input(account_id.as_bytes());
     hasher.input(device_id.as_bytes());
@@ -342,6 +342,8 @@ pub fn to_uploaded_file(account_id: &str, device_id: &str, original_name: &str) 
 
     UploadedFile {
         original_name: String::from(original_name),
+        size,
+        mtime: NaiveDateTime::from_timestamp(mtime as i64, 0),
         account_id: String::from(account_id),
         device_id: String::from(device_id),
         identity_hash
