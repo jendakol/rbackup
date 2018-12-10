@@ -20,6 +20,7 @@ pub struct FileVersion {
     pub size: u64,
     pub hash: String,
     pub created: NaiveDateTime,
+    pub mtime: NaiveDateTime,
     pub storage_name: String
 }
 

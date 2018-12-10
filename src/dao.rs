@@ -111,9 +111,10 @@ impl Dao {
         let stopwatch = Stopwatch::start_new();
 
         let r = self.pool.prep_exec(
-            format!("insert into `{}`.files_versions (file_id, created, size, hash, storage_name) values (:file_id, :created, :size, :hash, :storage_name)", self.db_name),
+            format!("insert into `{}`.files_versions (file_id, created, mtime, size, hash, storage_name) values (:file_id, :created, :mtime, :size, :hash, :storage_name)", self.db_name),
             params! {"file_id" => file.id,
                                    "created" => &new_file_version.created,
+                                   "mtime" => &new_file_version.mtime,
                                    "size" => &new_file_version.size,
                                    "hash" => &new_file_version.hash,
                                    "storage_name" => &new_file_version.storage_name
@@ -143,7 +144,7 @@ impl Dao {
         let stopwatch = Stopwatch::start_new();
 
         let result = self.pool.prep_exec(
-            format!("select files.id, device_id, original_name, files_versions.id, size, hash, created, storage_name from `{}`.files join `{}`.files_versions on `{}`.files_versions.file_id = `{}`.files.id where identity_hash=:identity_hash",
+            format!("select files.id, device_id, original_name, files_versions.id, size, hash, created, mtime, storage_name from `{}`.files join `{}`.files_versions on `{}`.files_versions.file_id = `{}`.files.id where identity_hash=:identity_hash",
                     self.db_name, self.db_name, self.db_name, self.db_name),
             params! { "identity_hash" => identity_hash}
         )?;
@@ -152,7 +153,7 @@ impl Dao {
 
         // TODO optimize
         let file_with_versions = result.map(|x| x.unwrap()).map(|row| {
-            let (id, device_id, original_name, versionid, size, hash, created, storage_name) = mysql::from_row(row);
+            let (id, device_id, original_name, versionid, size, hash, created, mtime, storage_name) = mysql::from_row(row);
 
             (
                 (id, device_id, original_name),
@@ -161,6 +162,7 @@ impl Dao {
                     size,
                     hash,
                     created,
+                    mtime,
                     storage_name
                 }
             )
@@ -244,13 +246,13 @@ impl Dao {
         let stopwatch = Stopwatch::start_new();
 
         self.pool.prep_exec(
-            format!("select files.id, device_id, original_name, files_versions.id, size, hash, created, storage_name from `{}`.files join `{}`.files_versions on `{}`.files_versions.file_id = `{}`.files.id where account_id=:account_id and device_id=:device_id",
+            format!("select files.id, device_id, original_name, files_versions.id, size, hash, created, mtime, storage_name from `{}`.files join `{}`.files_versions on `{}`.files_versions.file_id = `{}`.files.id where account_id=:account_id and device_id=:device_id",
                     self.db_name, self.db_name, self.db_name, self.db_name), params! { "device_id" => device_id, "account_id" => account_id}
         ).and_then(|result| {
             self.report_timer("list_files", stopwatch);
 
             let files: Vec<File> = result.map(|x| x.unwrap()).map(|row| {
-                let (id, device_id, original_name, versionid, size, hash, created, storage_name) = mysql::from_row(row);
+                let (id, device_id, original_name, versionid, size, hash, created, mtime, storage_name) = mysql::from_row(row);
 
                 (
                     (id, device_id, original_name),
@@ -259,6 +261,7 @@ impl Dao {
                         size,
                         hash,
                         created,
+                        mtime,
                         storage_name
                     }
                 )

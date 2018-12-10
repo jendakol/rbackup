@@ -236,7 +236,8 @@ pub fn save(logger: &Logger, statsd_client: StatsdClient, repo: &Repo, dao: &Dao
                     version: 0, // cannot know now, will be filled in after DB insertion
                     size,
                     hash,
-                    created: uploaded_file.mtime,
+                    created: time_stamp,
+                    mtime: uploaded_file.mtime,
                     storage_name
                 };
 

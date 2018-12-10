@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS `DBNAME`.`files_versions` (
 `id` bigint(20) NOT NULL AUTO_INCREMENT PRIMARY KEY,
   `file_id` bigint(20) NOT NULL,
   `created` datetime(3) NOT NULL,
+  `mtime` datetime(3) NOT NULL,
   `size` int(11) NOT NULL,
   `hash` char(64) NOT NULL,
   `storage_name` char(64) NOT NULL,
