@@ -26,27 +26,29 @@ extern crate time;
 extern crate url;
 extern crate uuid;
 
-use cadence::prelude::*;
-use cadence::StatsdClient;
-use chrono::prelude::*;
-use dao::Dao;
-use encryptor::Encryptor;
-use failure::Error;
-use failures::*;
-use multipart::server::{Multipart, MultipartField, ReadEntry, ReadEntryResult};
-use rdedup::Repo as RdedupRepo;
-use responses::*;
-use rocket::data::Data;
-use rocket::data::DataStream;
-use sha2::{Digest, Sha256};
-use slog::Logger;
 use std::io::Read;
 use std::str;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
-use stopwatch::Stopwatch;
-use structs::*;
 use std::time::Duration;
+
+use cadence::prelude::*;
+use cadence::StatsdClient;
+use chrono::prelude::*;
+use failure::Error;
+use multipart::server::{Multipart, MultipartField, ReadEntry, ReadEntryResult};
+use rdedup::Repo as RdedupRepo;
+use rocket::data::Data;
+use rocket::data::DataStream;
+use sha2::{Digest, Sha256};
+use slog::Logger;
+use stopwatch::Stopwatch;
+
+use dao::Dao;
+use encryptor::Encryptor;
+use failures::*;
+use responses::*;
+use structs::*;
 
 pub mod dao;
 pub mod failures;
@@ -299,7 +301,7 @@ pub fn remove_file_version(repo: &Repo, dao: &Dao, version_id: u64) -> Result<Re
         })
 }
 
-pub fn remove_file(logger:&Logger, repo: &Repo, dao: &Dao, device_id: &str, file_id: u64) -> Result<RemoveFileResult, Error> {
+pub fn remove_file(logger: &Logger, repo: &Repo, dao: &Dao, device_id: &str, file_id: u64) -> Result<RemoveFileResult, Error> {
     dao.remove_file(device_id, file_id)
         .map(|opt| match opt {
             Some(storage_names) => {
@@ -344,7 +346,7 @@ pub fn to_uploaded_file(account_id: &str, device_id: &str, original_name: &str, 
     UploadedFile {
         original_name: String::from(original_name),
         size,
-        mtime: NaiveDateTime::from_timestamp(mtime as i64, 0),
+        mtime: NaiveDateTime::from_timestamp((mtime / 1000) as i64, (mtime % 1000 * 1000000) as u32),
         account_id: String::from(account_id),
         device_id: String::from(device_id),
         identity_hash
