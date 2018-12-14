@@ -22,14 +22,21 @@ function wait_for_service() {
     echo -e "rbackup ready"
 }
 
+function set_correct_version {
+    if [ -n "${TRAVIS_TAG}" ]; then
+        echo "Set version to ${TRAVIS_TAG}"
+        bash -c 'sed -i -r -e "s/^version = \"[0-9]+\.[0-9]+\.[0-9]+\"$/version = \""${TRAVIS_TAG}"\"/g" Cargo.toml'
+    fi
+}
+
 function rbackup_test {
-     bash -c 'sed -i -r -e "s/^version = \"[0-9]+\.[0-9]+\.[0-9]+\"$/version = \""${TRAVIS_TAG}"\"/g" Cargo.toml' && \
-     docker build -t rbackup . && \
-     cd tests && \
-     docker-compose up -d --build --force-recreate && \
-     wait_for_service && \
-     ./tests.sh && \
-     docker-compose down
+    set_correct_version && \
+    docker build -t rbackup . && \
+    cd tests && \
+    docker-compose up -d --build --force-recreate && \
+    wait_for_service && \
+    ./tests.sh && \
+    docker-compose down
 }
 
 function rbackup_publish {
