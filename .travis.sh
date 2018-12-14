@@ -46,8 +46,8 @@ function rbackup_publish {
     docker tag rbackup jendakol/rbackup:latest && \
     docker tag rbackup jendakol/rbackup:$stripped_version && \
     mkdir ~/.docker || true && \
-    echo -e {\"auths\": {\"https://index.docker.io/v1/\": {\"auth\": \"${AUTH_TOKEN}\"}},\"HttpHeaders\": {\"User-Agent\": \"Travis\"}} > ~/.docker/config.json
-#    docker push jendakol/rbackup
+    echo -e {\"auths\": {\"https://index.docker.io/v1/\": {\"auth\": \"${AUTH_TOKEN}\"}},\"HttpHeaders\": {\"User-Agent\": \"Travis\"}} > ~/.docker/config.json && \
+    docker push jendakol/rbackup
 }
 
 sudo apt-get -qq update \
