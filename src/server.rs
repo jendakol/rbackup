@@ -1,11 +1,6 @@
 use cadence::prelude::*;
 use cadence::StatsdClient;
 use failure::Error;
-use rbackup;
-use rbackup::dao::Dao;
-use rbackup::encryptor::Encryptor;
-use rbackup::responses::*;
-use rbackup::structs::*;
 use rocket;
 use rocket::Data;
 use rocket::http::{ContentType, Status};
@@ -16,6 +11,12 @@ use rocket::State;
 use slog;
 use slog::Logger;
 use stopwatch;
+
+use rbackup;
+use rbackup::dao::Dao;
+use rbackup::encryptor::Encryptor;
+use rbackup::responses::*;
+use rbackup::structs::*;
 
 type HandlerResult<T> = Result<T, status::Custom<String>>;
 
@@ -83,8 +84,13 @@ impl<'a, 'r> FromRequest<'a, 'r> for Headers {
 }
 
 #[get("/status")]
-fn status() -> status::Custom<String> {
-    status::Custom(Status::Ok, String::from("{\"status\": \"RBackup running\"}"))
+fn status(config: State<HandlerConfig>) -> HandlerResult<StatusResult> {
+    debug!(config.logger, "Requesting server status");
+
+    Ok(StatusResult {
+        status: String::from("RBackup running"),
+        version: rbackup::APP_VERSION.to_string()
+    })
 }
 
 #[get("/account/register?<metadata>")]

@@ -2,6 +2,8 @@
 extern crate arrayref;
 extern crate cache_2q;
 extern crate cadence;
+#[macro_use]
+extern crate clap;
 extern crate chrono;
 extern crate crypto;
 extern crate env_logger;
@@ -55,6 +57,8 @@ pub mod failures;
 pub mod encryptor;
 pub mod structs;
 pub mod responses;
+
+pub const APP_VERSION: &str = crate_version!();
 
 struct DigestDataStream {
     inner: Arc<Mutex<DigestDataStreamInner>>,

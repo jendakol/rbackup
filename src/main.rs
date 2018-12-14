@@ -155,7 +155,7 @@ fn load_config(path: &str) -> Result<config::Config, Error> {
 
 fn get_app_config() -> Result<Either<AppConfig, (Level, AppCommand)>, Error> {
     let matches = App::new("RBackup")
-        .version("0.1.0") // TODO parametrize version
+        .version(rbackup::APP_VERSION)
         .about("Deduplicating secure backup server")
         .arg(Arg::with_name("config")
             .short("c")
@@ -311,6 +311,8 @@ fn create_statsd_client(logger: Logger, config: &Option<StatsdConfig>) -> Result
 }
 
 fn main() {
+    println!("RBackup server {}", rbackup::APP_VERSION);
+
     let app_config = match get_app_config() {
         Ok(Left(app_config)) => app_config,
         Ok(Right((logging_level, command))) => {

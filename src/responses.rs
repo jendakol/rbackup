@@ -9,6 +9,12 @@ use rocket::response::status::Custom as CustomStatus;
 use std::io::{Cursor, Error as IoError};
 use structs::*;
 
+#[derive(Serialize)]
+pub struct StatusResult {
+    pub status: String,
+    pub version: String
+}
+
 pub enum RegisterResult {
     Created(String),
     Exists
@@ -49,6 +55,19 @@ pub enum RemoveFileResult {
 pub enum RemoveFileVersionResult {
     Success,
     FileNotFound
+}
+
+impl<'r> Responder<'r> for StatusResult {
+    fn respond_to(self, req: &Request) -> Result<Response<'r>, Status> {
+        serde_json::to_string(&self)
+            .map_err(failure::Error::from)
+            .map_err(status_internal_server_error)
+            .respond_to(req)
+            .map(|mut resp| {
+                resp.adjoin_header(ContentType::JSON);
+                resp
+            })
+    }
 }
 
 impl<'r> Responder<'r> for RegisterResult {

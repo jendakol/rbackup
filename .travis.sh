@@ -6,7 +6,7 @@ function wait_for_service() {
     do
       echo -e "Waiting for rbackup"
 
-      if [ "$(curl "http://localhost:3369/status" 2>/dev/null)" == "{\"status\": \"RBackup running\"}" ]; then
+      if [ "$(curl "http://localhost:3369/status" 2>/dev/null | jq -r '.status' )" == "RBackup running" ]; then
         break
       fi
 
@@ -15,6 +15,7 @@ function wait_for_service() {
     done
 
     if [ $n -ge 30 ]; then
+      docker-compose down
       exit 1
     fi
 
@@ -22,7 +23,7 @@ function wait_for_service() {
 }
 
 function rbackup_test {
-     docker build -t rbackup . && \
+     bash -c 'sed -i -r -e "s/^version = \"[0-9]+\.[0-9]+\.[0-9]+\"$/version = \""${TRAVIS_TAG}"\"/g" Cargo.toml' && \
      cd tests && \
      docker-compose up -d --build --force-recreate && \
      wait_for_service && \
@@ -33,12 +34,12 @@ function rbackup_test {
 function rbackup_publish {
     stripped_version=$(echo $TRAVIS_TAG | awk -F '[.]' '{print $1 "." $2}')
 
-    docker tag rbackup jendakol/rbackup:$TRAVIS_TAG
-    docker tag rbackup jendakol/rbackup:latest
-    docker tag rbackup jendakol/rbackup:$stripped_version
-    mkdir ~/.docker || true
+    docker tag rbackup jendakol/rbackup:$TRAVIS_TAG && \
+    docker tag rbackup jendakol/rbackup:latest && \
+    docker tag rbackup jendakol/rbackup:$stripped_version && \
+    mkdir ~/.docker || true && \
     echo -e {\"auths\": {\"https://index.docker.io/v1/\": {\"auth\": \"${AUTH_TOKEN}\"}},\"HttpHeaders\": {\"User-Agent\": \"Travis\"}} > ~/.docker/config.json
-    docker push jendakol/rbackup
+#    docker push jendakol/rbackup
 }
 
 sudo apt-get -qq update \
