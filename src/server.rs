@@ -5,7 +5,7 @@ use rocket;
 use rocket::Data;
 use rocket::http::{ContentType, Status};
 use rocket::Outcome;
-use rocket::request::{self, FromRequest, Request};
+use rocket::request::{self, FromRequest, Request, Form};
 use rocket::response::{Response, status};
 use rocket::State;
 use slog;
@@ -21,46 +21,46 @@ use rbackup::structs::*;
 type HandlerResult<T> = Result<T, status::Custom<String>>;
 
 #[derive(FromForm)]
-struct UploadMetadata {
+pub struct UploadMetadata {
     file_path: String,
     size: u64,
     mtime: u64,
 }
 
 #[derive(FromForm)]
-struct DownloadMetadata {
+pub struct DownloadMetadata {
     file_version_id: u64,
 }
 
 #[derive(FromForm)]
-struct RemoveFileMetadata {
+pub struct RemoveFileMetadata {
     file_id: u64,
 }
 
 #[derive(FromForm)]
-struct ListFilesMetadata {
+pub struct ListFilesMetadata {
     device_id: Option<String>,
 }
 
 #[derive(FromForm)]
-struct RemoveFileVersionMetadata {
+pub struct RemoveFileVersionMetadata {
     file_version_id: u64,
 }
 
 #[derive(FromForm)]
-struct LoginMetadata {
+pub struct LoginMetadata {
     device_id: String,
     username: String,
     password: String
 }
 
 #[derive(FromForm)]
-struct RegisterMetadata {
+pub struct RegisterMetadata {
     username: String,
     password: String
 }
 
-struct Headers {
+pub struct Headers {
     session_pass: String
 }
 
@@ -84,7 +84,7 @@ impl<'a, 'r> FromRequest<'a, 'r> for Headers {
 }
 
 #[get("/status")]
-fn status(config: State<HandlerConfig>) -> HandlerResult<StatusResult> {
+pub fn status(config: State<HandlerConfig>) -> HandlerResult<StatusResult> {
     debug!(config.logger, "Requesting server status");
 
     Ok(StatusResult {
@@ -93,9 +93,11 @@ fn status(config: State<HandlerConfig>) -> HandlerResult<StatusResult> {
     })
 }
 
-#[get("/account/register?<metadata>")]
-fn register(config: State<HandlerConfig>, metadata: RegisterMetadata) -> HandlerResult<RegisterResult> {
+#[get("/account/register?<metadata..>")]
+pub fn register(config: State<HandlerConfig>, metadata: Form<RegisterMetadata>) -> HandlerResult<RegisterResult> {
     debug!(config.logger, "Registering account '{}'", &metadata.username);
+
+    // TODO validate args
 
     with_metrics(&config.logger, &config.statsd_client, "register", || {
         rbackup::register(&config.logger, &config.dao, &config.repo_root, &metadata.username, &metadata.password)
@@ -103,9 +105,11 @@ fn register(config: State<HandlerConfig>, metadata: RegisterMetadata) -> Handler
     })
 }
 
-#[get("/account/login?<metadata>")]
-fn login(config: State<HandlerConfig>, metadata: LoginMetadata) -> HandlerResult<LoginResult> {
+#[get("/account/login?<metadata..>")]
+pub fn login(config: State<HandlerConfig>, metadata: Form<LoginMetadata>) -> HandlerResult<LoginResult> {
     info!(&config.logger, "Logging-in account '{}'", &metadata.username);
+
+    // TODO validate args
 
     with_metrics(&config.logger, &config.statsd_client, "login", || {
         rbackup::login(&config.dao, &config.encryptor, &metadata.device_id, &metadata.username, &metadata.password)
@@ -114,28 +118,28 @@ fn login(config: State<HandlerConfig>, metadata: LoginMetadata) -> HandlerResult
 }
 
 #[get("/list/files")]
-fn list_files(config: State<HandlerConfig>, headers: Headers) -> HandlerResult<ListFileResult> {
+pub fn list_files(config: State<HandlerConfig>, headers: Headers) -> HandlerResult<ListFileResult> {
     with_authentication(&config.logger, "list_files", &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
         rbackup::list_files(&config.dao, &device.account_id, &device.id)
     })
 }
 
-#[get("/list/files?<metadata>")]
-fn list_files_for_device(config: State<HandlerConfig>, headers: Headers, metadata: ListFilesMetadata) -> HandlerResult<ListFileResult> {
+#[get("/list/files?<metadata..>")]
+pub fn list_files_for_device(config: State<HandlerConfig>, headers: Headers, metadata: Form<ListFilesMetadata>) -> HandlerResult<ListFileResult> {
     with_authentication(&config.logger, "list_files", &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
-        rbackup::list_files(&config.dao, &device.account_id, &metadata.device_id.unwrap_or(device.id))
+        rbackup::list_files(&config.dao, &device.account_id, &metadata.into_inner().device_id.unwrap_or(device.id))
     })
 }
 
 #[get("/list/devices")]
-fn list_devices(config: State<HandlerConfig>, headers: Headers) -> HandlerResult<ListDevicesResult> {
+pub fn list_devices(config: State<HandlerConfig>, headers: Headers) -> HandlerResult<ListDevicesResult> {
     with_authentication(&config.logger, "list_devices", &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
         rbackup::list_devices(&config.dao, &device.account_id)
     })
 }
 
-#[get("/download?<metadata>")]
-fn download(config: State<HandlerConfig>, headers: Headers, metadata: DownloadMetadata) -> HandlerResult<Response> {
+#[get("/download?<metadata..>")]
+pub fn download(config: State<HandlerConfig>, headers: Headers, metadata: Form<DownloadMetadata>) -> HandlerResult<Response> {
     with_authentication(&config.logger, "download", &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
         debug!(config.logger, "Opening repo");
 
@@ -160,8 +164,8 @@ fn download(config: State<HandlerConfig>, headers: Headers, metadata: DownloadMe
     })
 }
 
-#[put("/upload?<metadata>", data = "<data>")]
-fn upload(config: State<HandlerConfig>, headers: Headers, metadata: UploadMetadata, data: Data, cont_type: &ContentType) -> HandlerResult<UploadResult> {
+#[put("/upload?<metadata..>", data = "<data>")]
+pub fn upload(config: State<HandlerConfig>, headers: Headers, metadata: Form<UploadMetadata>, data: Data, cont_type: &ContentType) -> HandlerResult<UploadResult> {
     with_authentication(&config.logger, "upload", &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
         let uploaded_file_metadata = rbackup::to_uploaded_file(&device.account_id, &device.id, &metadata.file_path, metadata.size, metadata.mtime);
 
@@ -182,8 +186,8 @@ fn upload(config: State<HandlerConfig>, headers: Headers, metadata: UploadMetada
     })
 }
 
-#[delete("/remove/fileVersion?<metadata>")]
-fn remove_file_version(config: State<HandlerConfig>, headers: Headers, metadata: RemoveFileVersionMetadata) -> HandlerResult<RemoveFileVersionResult> {
+#[delete("/remove/fileVersion?<metadata..>")]
+pub fn remove_file_version(config: State<HandlerConfig>, headers: Headers, metadata: Form<RemoveFileVersionMetadata>) -> HandlerResult<RemoveFileVersionResult> {
     with_authentication(&config.logger, "remove_file_version", &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
         Repo::new(&config.repo_root, &device.account_id, device.repo_pass, &config.logger)
             .and_then(|repo| {
@@ -192,8 +196,8 @@ fn remove_file_version(config: State<HandlerConfig>, headers: Headers, metadata:
     })
 }
 
-#[delete("/remove/file?<metadata>")]
-fn remove_file(config: State<HandlerConfig>, headers: Headers, metadata: RemoveFileMetadata) -> HandlerResult<RemoveFileResult> {
+#[delete("/remove/file?<metadata..>")]
+pub fn remove_file(config: State<HandlerConfig>, headers: Headers, metadata: Form<RemoveFileMetadata>) -> HandlerResult<RemoveFileResult> {
     with_authentication(&config.logger, "remove_file", &config.statsd_client, &config.dao, &config.encryptor, &headers.session_pass, |device| {
         Repo::new(&config.repo_root, &device.account_id, device.repo_pass.clone(), &config.logger)
             .and_then(|repo| {

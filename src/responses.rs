@@ -7,7 +7,7 @@ use rocket::request::Request;
 use rocket::response::{Responder, Response};
 use rocket::response::status::Custom as CustomStatus;
 use std::io::{Cursor, Error as IoError};
-use structs::*;
+use crate::structs::*;
 
 #[derive(Serialize)]
 pub struct StatusResult {

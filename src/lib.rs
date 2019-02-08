@@ -39,18 +39,18 @@ use cadence::StatsdClient;
 use chrono::prelude::*;
 use failure::Error;
 use multipart::server::{Multipart, MultipartField, ReadEntry, ReadEntryResult};
-use rdedup::Repo as RdedupRepo;
+use crate::rdedup::Repo as RdedupRepo;
 use rocket::data::Data;
 use rocket::data::DataStream;
 use sha2::{Digest, Sha256};
 use slog::Logger;
 use stopwatch::Stopwatch;
 
-use dao::Dao;
-use encryptor::Encryptor;
-use failures::*;
-use responses::*;
-use structs::*;
+use crate::dao::Dao;
+use crate::encryptor::Encryptor;
+use crate::failures::*;
+use crate::responses::*;
+use crate::structs::*;
 
 pub mod dao;
 pub mod failures;

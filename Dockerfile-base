@@ -4,6 +4,6 @@ WORKDIR /tmp/rbackup
 COPY . .
 
 RUN apt-get update && apt-get install -y curl file sudo gcc libsodium-dev clang-6.0 pkg-config make libssl-dev liblzma-dev \
- && curl -f -L https://static.rust-lang.org/rustup.sh -O \
- && /bin/bash rustup.sh --channel=nightly --date=2018-09-26 \
+ && curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain nightly-2019-02-07 -y \
+ && export PATH="$HOME/.cargo/bin:$PATH" \
  && cargo build --release

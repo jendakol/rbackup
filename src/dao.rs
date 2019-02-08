@@ -9,17 +9,17 @@ extern crate time;
 use cache_2q::Cache;
 use cadence::prelude::*;
 use cadence::StatsdClient;
-use dao::stopwatch::Stopwatch;
-use encryptor::Encryptor;
+use crate::dao::stopwatch::Stopwatch;
+use crate::encryptor::Encryptor;
 use failure::Error;
-use failures::CustomError;
+use crate::failures::CustomError;
 use hex;
-use responses::*;
+use crate::responses::*;
 use sha2::*;
 use slog::Logger;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
-use structs::*;
+use crate::structs::*;
 use uuid::Uuid;
 
 pub struct Dao {

@@ -1,5 +1,4 @@
-#![feature(plugin, custom_derive)]
-#![plugin(rocket_codegen)]
+#![feature(proc_macro_hygiene, decl_macro)]
 
 extern crate cadence;
 extern crate clap;
@@ -10,6 +9,7 @@ extern crate mysql;
 extern crate pipe;
 extern crate rbackup;
 extern crate rdedup_lib as rdedup;
+#[macro_use]
 extern crate rocket;
 extern crate serde;
 extern crate serde_json;
@@ -20,18 +20,20 @@ extern crate slog_stream;
 extern crate slog_term;
 extern crate stopwatch;
 
+use std::process::exit;
+use std::str::FromStr;
+
 use cadence::StatsdClient;
 use clap::{App, Arg, SubCommand};
 use either::{Either, Left, Right};
 use failure::Error;
-use rbackup::dao::Dao;
-use rbackup::encryptor::Encryptor;
-use server::*;
 use slog::{Drain, Level, Logger};
 use slog_async::Async;
 use slog_term::{FullFormat, TermDecorator};
-use std::process::exit;
-use std::str::FromStr;
+
+use rbackup::dao::Dao;
+use rbackup::encryptor::Encryptor;
+use crate::server::*;
 
 mod server;
 mod commands;
@@ -107,7 +109,7 @@ pub enum AppCommand {
 }
 
 fn exec_command(logger: &Logger, app_command: AppCommand) -> i32 {
-    use AppCommand::*;
+    use crate::AppCommand::*;
 
     info!(logger, "Executing command: {:?}", app_command);
 
@@ -129,11 +131,12 @@ fn init_logger(level: Level) -> Logger {
         .use_local_timestamp()
         .build()
         .filter_level(level);
-    let async = Async::new(term.ignore_res())
+
+    let async_term = Async::new(term.ignore_res())
         .chan_size(2048)
         .build();
 
-    Logger::root(async.ignore_res(), o!())
+    Logger::root(async_term.ignore_res(), o!())
 }
 
 fn load_config(path: &str) -> Result<config::Config, Error> {
@@ -249,7 +252,7 @@ fn start_server(logger: Logger, config: AppConfig, dao: Dao, statsd_client: Stat
         .log_level(rocket::logger::LoggingLevel::Critical)
         .unwrap();
 
-    rocket::custom(rocket_config, true)
+    rocket::custom(rocket_config)
         .mount("/", routes![status])
         .mount("/", routes![upload])
         .mount("/", routes![download])
