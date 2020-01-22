@@ -42,11 +42,13 @@ function rbackup_test {
 function rbackup_publish {
     stripped_version=$(echo $TRAVIS_TAG | awk -F '[.]' '{print $1 "." $2}')
 
+    echo "User: $DOCKER_USERNAME"
+
     docker tag rbackup jendakol/rbackup:$TRAVIS_TAG && \
     docker tag rbackup jendakol/rbackup:latest && \
     docker tag rbackup jendakol/rbackup:$stripped_version && \
     mkdir ~/.docker || true && \
-    echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin \
+    echo "$DOCKER_PASSWORD" | docker login --username "$DOCKER_USERNAME" --password-stdin && \
     docker push jendakol/rbackup
 }
 
