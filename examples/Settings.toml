@@ -8,6 +8,7 @@ address = "localhost"
 port = 3369
 workers = 20
 tls = { enabled = true, certs = "fullchain.pem", key = "privkey.pem" }
+secret = "Ya1JSsWQYo51/EsST9FgA6LBaRl2/QvYFa2U/+M3ogw="
 
 [maintenance]
 cron = "0 1/10 * * * *" # https://github.com/lholden/job_scheduler

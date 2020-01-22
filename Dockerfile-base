@@ -1,9 +1,0 @@
-FROM debian:buster-slim
-
-WORKDIR /tmp/rbackup
-COPY . .
-
-RUN apt-get update && apt-get install -y curl file sudo gcc libsodium-dev clang-6.0 pkg-config make libssl-dev liblzma-dev \
- && curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain nightly-2019-02-07 -y \
- && export PATH="$HOME/.cargo/bin:$PATH" \
- && cargo build --release

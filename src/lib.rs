@@ -62,11 +62,11 @@ pub const APP_VERSION: &str = crate_version!();
 
 struct DigestDataStream {
     inner: Arc<Mutex<DigestDataStreamInner>>,
-    handle_upload_chunk: Box<Fn(u64) -> () + Send + Sync + 'static>
+    handle_upload_chunk: Box<dyn Fn(u64) -> () + Send + Sync + 'static>
 }
 
 impl DigestDataStream {
-    pub fn new(inner: Arc<Mutex<DigestDataStreamInner>>, handle_upload_chunk: Box<Fn(u64) -> () + Send + Sync + 'static>) -> DigestDataStream {
+    pub fn new(inner: Arc<Mutex<DigestDataStreamInner>>, handle_upload_chunk: Box<dyn Fn(u64) -> () + Send + Sync + 'static>) -> DigestDataStream {
         DigestDataStream {
             inner,
             handle_upload_chunk
@@ -255,7 +255,7 @@ pub fn save(logger: &Logger, statsd_client: StatsdClient, repo: &Repo, dao: &Dao
         })
 }
 
-pub fn load(logger: Logger, repo: &Repo, dao: &Dao, version_id: u64) -> Result<Option<(String, u64, Box<Read>)>, Error> {
+pub fn load(logger: Logger, repo: &Repo, dao: &Dao, version_id: u64) -> Result<Option<(String, u64, Box<dyn Read>)>, Error> {
     dao.get_hash_size_and_storage_name(version_id)
         .map(|n| {
             n.map(|(hash, size, storage_name)| {
@@ -275,7 +275,7 @@ pub fn load(logger: Logger, repo: &Repo, dao: &Dao, version_id: u64) -> Result<O
                     ()
                 });
 
-                (hash, size, Box::from(reader) as Box<Read>)
+                (hash, size, Box::from(reader) as Box<dyn Read>)
             })
         }).map_err(Error::from)
 }

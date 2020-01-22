@@ -33,6 +33,7 @@ use slog_term::{FullFormat, TermDecorator};
 
 use rbackup::dao::Dao;
 use rbackup::encryptor::Encryptor;
+
 use crate::server::*;
 
 mod server;
@@ -92,7 +93,8 @@ struct ServerConfig {
     address: String,
     port: u16,
     workers: u16,
-    tls_config: Option<TlsConfig>
+    tls_config: Option<TlsConfig>,
+    secret: String
 }
 
 #[derive(Debug)]
@@ -217,7 +219,8 @@ fn get_app_config() -> Result<Either<AppConfig, (Level, AppCommand)>, Error> {
                     )
                 } else {
                     None
-                }
+                },
+                secret: config.get_str("server.secret")?
             },
             database: create_database_config(&config)?
         }
@@ -238,10 +241,11 @@ fn create_database_config(config: &config::Config) -> Result<DatabaseConfig, Err
 fn start_server(logger: Logger, config: AppConfig, dao: Dao, statsd_client: StatsdClient) -> () {
     info!(logger, "Configuring server"; "address" => &config.server.address, "port" => &config.server.port, "workers" => &config.server.workers);
 
-    let config_builder = rocket::Config::build(rocket::config::Environment::Development)
+    let config_builder = rocket::Config::build(rocket::config::Environment::Production)
         .address(config.server.address)
         .port(config.server.port)
-        .workers(config.server.workers);
+        .workers(config.server.workers)
+        .secret_key(config.server.secret);
 
     let config_builder = match config.server.tls_config {
         Some(tc) => config_builder.tls(tc.certs, tc.key),

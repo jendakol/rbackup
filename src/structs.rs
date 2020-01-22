@@ -26,7 +26,7 @@ pub struct FileVersion {
 
 pub struct Repo {
     pub repo: RdedupRepo,
-    pub pass: Box<Fn() -> std::io::Result<String> + Send + Sync>
+    pub pass: Box<dyn Fn() -> std::io::Result<String> + Send + Sync>
 }
 
 impl Repo {

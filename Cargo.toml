@@ -3,7 +3,6 @@ name = "rbackup"
 version = "0.1.0"
 authors = ["JendaKolena <jendakolena@gmail.com>"]
 
-cargo-features = ["edition"]
 edition = "2018"
 
 [dependencies]
