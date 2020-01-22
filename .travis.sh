@@ -46,7 +46,7 @@ function rbackup_publish {
     docker tag rbackup jendakol/rbackup:latest && \
     docker tag rbackup jendakol/rbackup:$stripped_version && \
     mkdir ~/.docker || true && \
-    echo -e {\"auths\": {\"https://index.docker.io/v1/\": {\"auth\": \"${AUTH_TOKEN}\"}},\"HttpHeaders\": {\"User-Agent\": \"Travis\"}} > ~/.docker/config.json && \
+    echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin \
     docker push jendakol/rbackup
 }
 
