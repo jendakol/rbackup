@@ -45,18 +45,13 @@ function rbackup_publish {
     echo "User: $DOCKER_USERNAME"
     echo "Pass: $DOCKER_PASSWORD"
 
-    docker tag rbackup jendakol/rbackup:$TRAVIS_TAG && \
-    docker tag rbackup jendakol/rbackup:latest && \
-    docker tag rbackup jendakol/rbackup:$stripped_version && \
     mkdir ~/.docker || true && \
     echo "$DOCKER_PASSWORD" | docker login --username "$DOCKER_USERNAME" --password-stdin
 }
 
 sudo apt-get -qq update \
     && sudo apt-get install -y jq && \
-    rbackup_test &&
-      if $(test "${TRAVIS_REPO_SLUG}" == "jendakol/rbackup" && test "${TRAVIS_PULL_REQUEST}" == "false" && test "$TRAVIS_TAG" != ""); then
+    
+    
         rbackup_publish
-      else
-        exit 0 # skipping publish, it's regular build
-      fi
+    
