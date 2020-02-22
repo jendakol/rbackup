@@ -43,13 +43,13 @@ function rbackup_publish {
     stripped_version=$(echo $TRAVIS_TAG | awk -F '[.]' '{print $1 "." $2}')
 
     echo "User: $DOCKER_USERNAME"
+    echo "Pass: $DOCKER_PASSWORD"
 
     docker tag rbackup jendakol/rbackup:$TRAVIS_TAG && \
     docker tag rbackup jendakol/rbackup:latest && \
     docker tag rbackup jendakol/rbackup:$stripped_version && \
     mkdir ~/.docker || true && \
-    echo "$DOCKER_PASSWORD" | docker login --username "$DOCKER_USERNAME" --password-stdin && \
-    docker push jendakol/rbackup
+    echo "$DOCKER_PASSWORD" | docker login --username "$DOCKER_USERNAME" --password-stdin
 }
 
 sudo apt-get -qq update \
