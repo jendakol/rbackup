@@ -42,11 +42,12 @@ function rbackup_test {
 function rbackup_publish {
     stripped_version=$(echo $TRAVIS_TAG | awk -F '[.]' '{print $1 "." $2}')
 
-    echo "User: $DOCKER_USERNAME"
-    echo "Pass: $DOCKER_PASSWORD"
-
+    docker tag rbackup jendakol/rbackup:$TRAVIS_TAG && \
+    docker tag rbackup jendakol/rbackup:latest && \
+    docker tag rbackup jendakol/rbackup:$stripped_version && \
     mkdir ~/.docker || true && \
-    echo "$DOCKER_PASSWORD" | docker login --username "$DOCKER_USERNAME" --password-stdin
+    echo -e {\"auths\": {\"https://index.docker.io/v1/\": {\"auth\": \"${AUTH_TOKEN}\"}},\"HttpHeaders\": {\"User-Agent\": \"Travis\"}} > ~/.docker/config.json && \
+    docker push jendakol/rbackup
 }
 
 sudo apt-get -qq update \
